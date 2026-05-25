@@ -5,6 +5,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/scanned_code.dart';
+import '../models/answer_key.dart';
 import '../services/history_database.dart';
 
 class ScannerScreen extends StatefulWidget {
@@ -55,6 +56,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     super.dispose();
   }
 
+  // ====================== GALLERY PICKER ======================
   Future<void> pickAndDecodeCode() async {
     final ImagePicker picker = ImagePicker();
     final XFile? file = await picker.pickImage(source: ImageSource.gallery);
@@ -98,10 +100,28 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   void _processScannedPayload(String rawValue) async {
     _lastScannedValue = rawValue;
 
+    if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
+      final answerKey = AnswerKey.fromPayload(rawValue);
+      final newItem = ScannedCode(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        type: 'answer_key',
+        value: rawValue,
+        title: answerKey.quizTitle,
+        dateTime: "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} "
+            "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+      );
+
+      await HistoryDatabase.saveItem(newItem);
+      _showAnswerKeyBottomSheet(answerKey, newItem);
+      return;
+    }
+
+    // Normal processing
     String type = 'text';
     String title = 'Scanned Text';
 
-    if (rawValue.startsWith('http://') || rawValue.startsWith('https://') || rawValue.contains(RegExp(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'))) {
+    if (rawValue.startsWith('http://') || rawValue.startsWith('https://') ||
+        rawValue.contains(RegExp(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'))) {
       type = 'url';
       title = rawValue.replaceAll('https://', '').replaceAll('http://', '').split('/').first;
     } else if (rawValue.startsWith('WIFI:')) {
@@ -115,15 +135,13 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
       title = 'EAN Product Item';
     }
 
-    final DateTime now = DateTime.now();
-    final String formattedTime = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-
     final newItem = ScannedCode(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       type: type,
       value: rawValue,
       title: title,
-      dateTime: formattedTime,
+      dateTime: "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} "
+          "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}",
     );
 
     await HistoryDatabase.saveItem(newItem);
@@ -148,6 +166,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
+  // ====================== BUILD METHOD (This was missing!) ======================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -182,7 +201,13 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
                           height: 3,
                           decoration: BoxDecoration(
                             color: Colors.blueAccent,
-                            boxShadow: [BoxShadow(color: Colors.blueAccent.withOpacity(0.8), blurRadius: 10, spreadRadius: 3)],
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.blueAccent.withOpacity(0.8),
+                                blurRadius: 10,
+                                spreadRadius: 3,
+                              )
+                            ],
                           ),
                         ),
                       ),
@@ -200,13 +225,27 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
                 children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(30)),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(30),
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.cyanAccent, shape: BoxShape.circle)),
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(color: Colors.cyanAccent, shape: BoxShape.circle),
+                        ),
                         const SizedBox(width: 8),
-                        Text("SCANNING FEED...", style: GoogleFonts.spaceGrotesk(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text(
+                          "SCANNING FEED...",
+                          style: GoogleFonts.spaceGrotesk(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -256,6 +295,65 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     );
   }
 
+  // ====================== ANSWER KEY SHEET ======================
+  void _showAnswerKeyBottomSheet(AnswerKey key, ScannedCode code) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.65,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF131B2E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
+              const SizedBox(height: 20),
+              Text(key.quizTitle, style: GoogleFonts.spaceGrotesk(fontSize: 20, fontWeight: FontWeight.bold)),
+              if (key.setInfo.isNotEmpty) Text("Set ${key.setInfo}", style: const TextStyle(color: Colors.cyanAccent, fontSize: 16)),
+              const SizedBox(height: 24),
+              _buildPart("Part - I", key.part1),
+              const SizedBox(height: 20),
+              _buildPart("Part - II", key.part2),
+              const Spacer(),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(vertical: 14)),
+                child: const Text("Close", style: TextStyle(color: Colors.white70)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ).then((_) => _lastScannedValue = null);
+  }
+
+  Widget _buildPart(String title, Map<String, String> answers) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: answers.entries.map((e) => Chip(
+            backgroundColor: Colors.blueAccent.withOpacity(0.15),
+            label: Text("${e.key} = ${e.value}", style: const TextStyle(fontWeight: FontWeight.bold)),
+          )).toList(),
+        ),
+      ],
+    );
+  }
+
+  // ====================== NORMAL RESULT SHEET ======================
   void _showResultBottomSheet(ScannedCode code) {
     showModalBottomSheet(
       context: context,
@@ -274,9 +372,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(
-                child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10))),
-              ),
+              Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
               const SizedBox(height: 20),
               Row(
                 children: [

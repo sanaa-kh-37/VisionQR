@@ -3,7 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 class GeneratorScreen extends StatefulWidget {
-  const GeneratorScreen({super.key});
+  final VoidCallback? onBack;
+  const GeneratorScreen({super.key, this.onBack});
 
   @override
   State<GeneratorScreen> createState() => _GeneratorScreenState();
@@ -23,6 +24,12 @@ class _GeneratorScreenState extends State<GeneratorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: widget.onBack != null
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: widget.onBack,
+              )
+            : null,
         title: Text("Create Vector QR", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,

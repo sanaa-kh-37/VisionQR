@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class DashboardScreen extends StatelessWidget {
+  final GlobalKey<ScaffoldState> scaffoldKey;
   final VoidCallback onNavigateToScan;
   final VoidCallback onNavigateToHistory;
   final VoidCallback onNavigateToCreate;
@@ -9,6 +10,7 @@ class DashboardScreen extends StatelessWidget {
 
   const DashboardScreen({
     super.key,
+    required this.scaffoldKey,
     required this.onNavigateToScan,
     required this.onNavigateToHistory,
     required this.onNavigateToCreate,
@@ -19,7 +21,15 @@ class DashboardScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("VisionQR Dashboard", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold)),
+        // Hamburger menu button — opens the drawer in HomeScreen
+        leading: IconButton(
+          icon: const Icon(Icons.menu_rounded, color: Colors.white),
+          onPressed: () => scaffoldKey.currentState?.openDrawer(),
+        ),
+        title: Text(
+          "VisionQR Dashboard",
+          style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -29,7 +39,7 @@ class DashboardScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Banner Card (same as before)
+            // Banner Card
             Container(
               padding: const EdgeInsets.all(22),
               decoration: BoxDecoration(
@@ -63,7 +73,8 @@ class DashboardScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 14),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
                             color: Colors.black38,
                             borderRadius: BorderRadius.circular(12),
@@ -71,7 +82,8 @@ class DashboardScreen extends StatelessWidget {
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 12),
+                              Icon(Icons.check_circle_outline,
+                                  color: Colors.greenAccent, size: 12),
                               SizedBox(width: 6),
                             ],
                           ),
@@ -85,13 +97,15 @@ class DashboardScreen extends StatelessWidget {
                       color: Colors.white.withOpacity(0.2),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.flash_on, color: Colors.white, size: 34),
+                    child: const Icon(Icons.flash_on,
+                        color: Colors.white, size: 34),
                   )
                 ],
               ),
             ),
             const SizedBox(height: 28),
 
+            // 4-card grid
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -130,6 +144,7 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
@@ -179,7 +194,10 @@ class DashboardScreen extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 9, color: Colors.white38, height: 1.2),
+                  style: const TextStyle(
+                      fontSize: 9,
+                      color: Colors.white38,
+                      height: 1.2),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -7,10 +8,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/scanned_code.dart';
 import '../models/answer_key.dart';
 import '../services/history_database.dart';
+import '../services/ocr_service.dart';
 
 class ScannerScreen extends StatefulWidget {
   final bool isScanning;
-  const ScannerScreen({super.key, required this.isScanning});
+  final VoidCallback? onBack;
+  const ScannerScreen({super.key, required this.isScanning, this.onBack});
 
   @override
   State<ScannerScreen> createState() => ScannerScreenState();
@@ -18,6 +21,9 @@ class ScannerScreen extends StatefulWidget {
 
 class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderStateMixin {
   final MobileScannerController _controller = MobileScannerController(autoStart: false);
+  final OcrService _ocrService = OcrService();
+  final ImagePicker _picker = ImagePicker();
+
   bool _isFlashOn = false;
   bool _isARActive = true;
   String? _lastScannedValue;
@@ -53,13 +59,13 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   void dispose() {
     _controller.dispose();
     _arAnimationController.dispose();
+    _ocrService.dispose();
     super.dispose();
   }
 
   // ====================== GALLERY PICKER ======================
   Future<void> pickAndDecodeCode() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? file = await picker.pickImage(source: ImageSource.gallery);
+    final XFile? file = await _picker.pickImage(source: ImageSource.gallery);
     if (file == null) return;
 
     try {
@@ -97,16 +103,82 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
+  Future<StudentInfo?> _promptForOcr() async {
+    // Stop scanner while taking photo
+    _controller.stop();
+
+    StudentInfo? info;
+    bool skipOcr = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        title: Text("Quiz QR Detected!", style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: const Text("Would you like to scan the student's handwritten Name and Registration Number from this paper?", style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () {
+              skipOcr = true;
+              Navigator.pop(context);
+            },
+            child: const Text("Skip", style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: () async {
+              final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+              if (photo != null) {
+                // Show loading
+                if (context.mounted) {
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (ctx) => const Center(child: CircularProgressIndicator()),
+                  );
+                }
+
+                try {
+                  info = await _ocrService.extractStudentInfo(File(photo.path));
+                } catch (_) {}
+
+                if (context.mounted) {
+                  Navigator.pop(context); // close loading
+                  Navigator.pop(context); // close choice dialog
+                }
+              }
+            },
+            child: const Text("Capture & OCR", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    // Resume scanner if needed
+    if (widget.isScanning) {
+      _controller.start();
+    }
+
+    return info;
+  }
+
   void _processScannedPayload(String rawValue) async {
     _lastScannedValue = rawValue;
 
     if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
       final answerKey = AnswerKey.fromPayload(rawValue);
+
+      // Trigger OCR logic
+      final StudentInfo? studentInfo = await _promptForOcr();
+
       final newItem = ScannedCode(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         type: 'answer_key',
         value: rawValue,
         title: answerKey.quizTitle,
+        studentName: studentInfo?.name,
+        studentRegNo: studentInfo?.regNo,
         dateTime: "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} "
             "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}",
       );
@@ -166,7 +238,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
-  // ====================== BUILD METHOD (This was missing!) ======================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -220,54 +291,72 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black87,
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(color: Colors.cyanAccent, shape: BoxShape.circle),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          "SCANNING FEED...",
-                          style: GoogleFonts.spaceGrotesk(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      CircleAvatar(
-                        backgroundColor: Colors.black87,
-                        child: IconButton(
-                          icon: Icon(_isFlashOn ? Icons.flash_on : Icons.flash_off, color: Colors.blueAccent),
-                          onPressed: () {
-                            setState(() => _isFlashOn = !_isFlashOn);
-                            _controller.toggleTorch();
-                          },
-                        ),
+                      Row(
+                        children: [
+                          if (widget.onBack != null) ...[
+                            CircleAvatar(
+                              backgroundColor: Colors.black87,
+                              child: IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                                onPressed: widget.onBack,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                          ],
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(30),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(color: Colors.cyanAccent, shape: BoxShape.circle),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  "SCANNING FEED...",
+                                  style: GoogleFonts.spaceGrotesk(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      CircleAvatar(
-                        backgroundColor: Colors.black87,
-                        child: IconButton(
-                          icon: Icon(_isARActive ? Icons.auto_awesome : Icons.blur_off, color: Colors.cyanAccent),
-                          onPressed: () => setState(() => _isARActive = !_isARActive),
-                        ),
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            backgroundColor: Colors.black87,
+                            child: IconButton(
+                              icon: Icon(_isFlashOn ? Icons.flash_on : Icons.flash_off, color: Colors.blueAccent),
+                              onPressed: () {
+                                setState(() => _isFlashOn = !_isFlashOn);
+                                _controller.toggleTorch();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          CircleAvatar(
+                            backgroundColor: Colors.black87,
+                            child: IconButton(
+                              icon: Icon(_isARActive ? Icons.auto_awesome : Icons.blur_off, color: Colors.cyanAccent),
+                              onPressed: () => setState(() => _isARActive = !_isARActive),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -302,9 +391,9 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.65,
-        minChildSize: 0.4,
-        maxChildSize: 0.9,
+        initialChildSize: 0.75,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
         builder: (_, scrollController) => Container(
           decoration: const BoxDecoration(
             color: Color(0xFF131B2E),
@@ -316,16 +405,53 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
             children: [
               Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
               const SizedBox(height: 20),
+              
+              // Student Info Header (OCR Result)
+              if (code.studentName != null || code.studentRegNo != null)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 20),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.blueAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.person_pin_rounded, color: Colors.blueAccent, size: 40),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(code.studentName ?? "Name Not Found", 
+                              style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                            Text("Registration: ${code.studentRegNo ?? "N/A"}", 
+                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
               Text(key.quizTitle, style: GoogleFonts.spaceGrotesk(fontSize: 20, fontWeight: FontWeight.bold)),
               if (key.setInfo.isNotEmpty) Text("Set ${key.setInfo}", style: const TextStyle(color: Colors.cyanAccent, fontSize: 16)),
               const SizedBox(height: 24),
-              _buildPart("Part - I", key.part1),
-              const SizedBox(height: 20),
-              _buildPart("Part - II", key.part2),
-              const Spacer(),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  children: [
+                    _buildPart("Part - I", key.part1),
+                    const SizedBox(height: 24),
+                    _buildPart("Part - II", key.part2),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(vertical: 14)),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50)),
                 child: const Text("Close", style: TextStyle(color: Colors.white70)),
               ),
             ],

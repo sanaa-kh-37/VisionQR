@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/scanned_code.dart';
+import '../models/answer_key.dart';
 import '../services/history_database.dart';
 
 class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key});
+  final VoidCallback? onBack;
+  const HistoryScreen({super.key, this.onBack});
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
@@ -50,6 +52,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: widget.onBack != null
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: widget.onBack,
+              )
+            : null,
         title: Text("Scanned History Logs", style: GoogleFonts.spaceGrotesk(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -85,10 +93,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
               leading: Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                child: Icon(item.type == 'url' ? Icons.link : Icons.qr_code, color: Colors.blueAccent),
+                child: Icon(item.type == 'answer_key' ? Icons.quiz_rounded : (item.type == 'url' ? Icons.link : Icons.qr_code), color: Colors.blueAccent),
               ),
               title: Text(item.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(item.dateTime, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+              subtitle: Text(
+                item.studentName != null ? "Student: ${item.studentName} | ${item.dateTime}" : item.dateTime, 
+                style: const TextStyle(color: Colors.white38, fontSize: 10)
+              ),
               trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.white24),
               onTap: () => _showResultDetails(item),
             ),
@@ -99,6 +110,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   void _showResultDetails(ScannedCode code) {
+    if (code.type == 'answer_key') {
+      final key = AnswerKey.fromPayload(code.value);
+      _showAnswerKeyDetails(key, code);
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF131B2E),
@@ -115,19 +132,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Expanded(
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-                    onPressed: () async {
-                      String rUrl = code.value.trim();
-                      if (!rUrl.startsWith('http://') && !rUrl.startsWith('https://')) {
-                        rUrl = "https://$rUrl";
-                      }
-                      await launchUrl(Uri.parse(rUrl), mode: LaunchMode.externalApplication);
-                    },
-                    child: const Text("Launch Browser", style: TextStyle(color: Colors.white)),
+                if (code.type == 'url')
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                      onPressed: () async {
+                        String rUrl = code.value.trim();
+                        if (!rUrl.startsWith('http://') && !rUrl.startsWith('https://')) {
+                          rUrl = "https://$rUrl";
+                        }
+                        await launchUrl(Uri.parse(rUrl), mode: LaunchMode.externalApplication);
+                      },
+                      child: const Text("Launch Browser", style: TextStyle(color: Colors.white)),
+                    ),
                   ),
-                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton(
@@ -141,6 +159,99 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  void _showAnswerKeyDetails(AnswerKey key, ScannedCode code) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.75,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF131B2E),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
+              const SizedBox(height: 20),
+              
+              if (code.studentName != null || code.studentRegNo != null)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 20),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.blueAccent.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.person_pin_rounded, color: Colors.blueAccent, size: 40),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(code.studentName ?? "Name Not Found", 
+                              style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                            Text("Registration: ${code.studentRegNo ?? "N/A"}", 
+                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              Text(key.quizTitle, style: GoogleFonts.spaceGrotesk(fontSize: 20, fontWeight: FontWeight.bold)),
+              if (key.setInfo.isNotEmpty) Text("Set ${key.setInfo}", style: const TextStyle(color: Colors.cyanAccent, fontSize: 16)),
+              const SizedBox(height: 24),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  children: [
+                    _buildPartSection("Part - I", key.part1),
+                    const SizedBox(height: 24),
+                    _buildPartSection("Part - II", key.part2),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.white12, padding: const EdgeInsets.symmetric(vertical: 14), minimumSize: const Size(double.infinity, 50)),
+                child: const Text("Close", style: TextStyle(color: Colors.white70)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPartSection(String title, Map<String, String> answers) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: GoogleFonts.spaceGrotesk(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: answers.entries.map((e) => Chip(
+            backgroundColor: Colors.blueAccent.withOpacity(0.15),
+            label: Text("${e.key} = ${e.value}", style: const TextStyle(fontWeight: FontWeight.bold)),
+          )).toList(),
+        ),
+      ],
     );
   }
 }

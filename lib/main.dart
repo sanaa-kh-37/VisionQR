@@ -4,9 +4,12 @@ import 'screens/dashboard_screen.dart';
 import 'screens/scanner_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/generator_screen.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-void main() {
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   runApp(const MyApp());
 }
 
@@ -39,7 +42,8 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
   late AnimationController _fadeController;
 
   @override
@@ -81,7 +85,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     width: 130,
                     height: 130,
                     child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent.withOpacity(0.4)),
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.blueAccent.withOpacity(0.4)),
                       strokeWidth: 2,
                     ),
                   ),
@@ -91,7 +96,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                     decoration: BoxDecoration(
                       color: Colors.blueAccent.withOpacity(0.1),
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.blueAccent.withOpacity(0.2), width: 1.5),
+                      border: Border.all(
+                          color: Colors.blueAccent.withOpacity(0.2),
+                          width: 1.5),
                     ),
                     child: const Icon(
                       Icons.qr_code_2_rounded,
@@ -116,7 +123,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                 width: 120,
                 child: LinearProgressIndicator(
                   backgroundColor: Color(0xFF1E293B),
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                  valueColor:
+                  AlwaysStoppedAnimation<Color>(Colors.blueAccent),
                 ),
               ),
             ],
@@ -127,7 +135,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 }
 
-// ====================== HOME SCREEN (TAB HOLDER) ======================
+// ====================== HOME SCREEN ======================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -137,12 +145,22 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  final GlobalKey<ScannerScreenState> _scannerKey = GlobalKey<ScannerScreenState>();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<ScannerScreenState> _scannerKey =
+  GlobalKey<ScannerScreenState>();
+
+  void _navigate(int index) {
+    setState(() => _currentIndex = index);
+    if (_scaffoldKey.currentState?.isDrawerOpen ?? false) {
+      Navigator.pop(context); // close drawer
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final List<Widget> screens = [
       DashboardScreen(
+        scaffoldKey: _scaffoldKey,
         onNavigateToScan: () => setState(() => _currentIndex = 1),
         onNavigateToHistory: () => setState(() => _currentIndex = 2),
         onNavigateToCreate: () => setState(() => _currentIndex = 3),
@@ -153,43 +171,147 @@ class _HomeScreenState extends State<HomeScreen> {
           });
         },
       ),
-      ScannerScreen(key: _scannerKey, isScanning: _currentIndex == 1),
-      const HistoryScreen(),
-      const GeneratorScreen(),
+      ScannerScreen(
+        key: _scannerKey,
+        isScanning: _currentIndex == 1,
+        onBack: () => setState(() => _currentIndex = 0),
+      ),
+      HistoryScreen(onBack: () => setState(() => _currentIndex = 0)),
+      GeneratorScreen(onBack: () => setState(() => _currentIndex = 0)),
     ];
 
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: screens,
+    return PopScope(
+      canPop: _currentIndex == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        setState(() => _currentIndex = 0);
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        // ====================== DRAWER (SIDEBAR) ======================
+        drawer: Drawer(
+          backgroundColor: const Color(0xFF131B2E),
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Drawer Header
+                Padding(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.blueAccent.withOpacity(0.15),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.blueAccent.withOpacity(0.3)),
+                        ),
+                        child: const Icon(Icons.qr_code_2_rounded,
+                            color: Colors.blueAccent, size: 28),
+                      ),
+                      const SizedBox(width: 14),
+                      Text(
+                        "VisionQR",
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                const SizedBox(height: 12),
+
+                // Nav Items
+                _drawerItem(
+                  icon: Icons.home_rounded,
+                  label: "Home",
+                  index: 0,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(0),
+                ),
+                _drawerItem(
+                  icon: Icons.qr_code_scanner_rounded,
+                  label: "Scan",
+                  index: 1,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(1),
+                ),
+                _drawerItem(
+                  icon: Icons.history_edu_rounded,
+                  label: "History",
+                  index: 2,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(2),
+                ),
+                _drawerItem(
+                  icon: Icons.add_box_rounded,
+                  label: "Create",
+                  index: 3,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(3),
+                ),
+
+                const Spacer(),
+                const Divider(color: Colors.white12, height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    "VisionQR v1.0.0",
+                    style: TextStyle(
+                        color: Colors.white24,
+                        fontSize: 12,
+                        fontFamily: GoogleFonts.inter().fontFamily),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        body: IndexedStack(
+          index: _currentIndex,
+          children: screens,
+        ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
-        indicatorColor: Colors.blueAccent.withOpacity(0.2),
-        backgroundColor: const Color(0xFF131B2E),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined, color: Colors.white54),
-            selectedIcon: Icon(Icons.home, color: Colors.blueAccent),
-            label: "Home",
+    );
+  }
+
+  Widget _drawerItem({
+    required IconData icon,
+    required String label,
+    required int index,
+    required int currentIndex,
+    required VoidCallback onTap,
+  }) {
+    final bool isSelected = index == currentIndex;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: ListTile(
+        leading: Icon(
+          icon,
+          color: isSelected ? Colors.blueAccent : Colors.white54,
+          size: 22,
+        ),
+        title: Text(
+          label,
+          style: GoogleFonts.spaceGrotesk(
+            color: isSelected ? Colors.blueAccent : Colors.white70,
+            fontWeight:
+            isSelected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 15,
           ),
-          NavigationDestination(
-            icon: Icon(Icons.qr_code_scanner_rounded, color: Colors.white54),
-            selectedIcon: Icon(Icons.qr_code_scanner, color: Colors.blueAccent),
-            label: "Scan",
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history_rounded, color: Colors.white54),
-            selectedIcon: Icon(Icons.history_edu, color: Colors.blueAccent),
-            label: "History",
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.add_box_outlined, color: Colors.white54),
-            selectedIcon: Icon(Icons.add_box, color: Colors.blueAccent),
-            label: "Create",
-          ),
-        ],
+        ),
+        selected: isSelected,
+        selectedTileColor: Colors.blueAccent.withOpacity(0.1),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        onTap: onTap,
       ),
     );
   }

@@ -5,6 +5,8 @@ class ScannedCode {
   final String title;
   final String dateTime;
   bool isFavorite;
+  final String? studentName;
+  final String? studentRegNo;
 
   ScannedCode({
     required this.id,
@@ -13,6 +15,8 @@ class ScannedCode {
     required this.title,
     required this.dateTime,
     this.isFavorite = false,
+    this.studentName,
+    this.studentRegNo,
   });
 
   Map<String, dynamic> toMap() => {
@@ -22,6 +26,8 @@ class ScannedCode {
     'title': title,
     'dateTime': dateTime,
     'isFavorite': isFavorite ? 1 : 0,
+    'studentName': studentName,
+    'studentRegNo': studentRegNo,
   };
 
   factory ScannedCode.fromMap(Map<String, dynamic> map) => ScannedCode(
@@ -31,5 +37,7 @@ class ScannedCode {
     title: map['title'],
     dateTime: map['dateTime'],
     isFavorite: map['isFavorite'] == 1,
+    studentName: map['studentName'],
+    studentRegNo: map['studentRegNo'],
   );
 }

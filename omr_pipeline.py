@@ -1,70 +1,68 @@
 """
-omr_pipeline.py — FIXED VERSION (16 Questions)
-Part-I:  Q01–Q08  (left  half of answer table)
-Part-II: Q09–Q16  (right half of answer table)
+omr_pipeline.py — FINAL CORRECT VERSION
+=========================================
+Part-I:  Q01–Q08  (keys: "Q01"…"Q08")
+Part-II: Q01–Q08  (keys: "Q01"…"Q08")
 
-FIXES vs old version:
-  1. Grid-based bubble reading instead of contour fill-ratio
-     → no more wrong answer mapping (A→C shift gone)
-  2. Answer table is isolated before splitting left/right
-     → Part-II bubbles no longer cut off
-  3. Adaptive darkness threshold per-bubble
-     → filled bubbles detected even under varying lighting
-  4. Debug images saved for every run so you can see what's happening
+KEY INSIGHT — relative scoring:
+  An empty printed circle has a dark BORDER that gives ~0.30 darkness.
+  A filled bubble is uniformly dark, giving ~0.70–0.90 darkness.
+  So we DON'T use an absolute threshold.
+  Instead: a bubble is filled if its score is ≥ RELATIVE_FACTOR × row average.
+  On a blank sheet, all 4 bubbles score similarly → ratio ≈ 1.0–1.2 → blank.
+  On a filled sheet, one bubble scores 2–3× the others → ratio > 1.5 → filled.
 """
 
 import cv2
 import numpy as np
 
 # ========================= CONFIG =========================
-NUM_QUESTIONS  = 8     # per part (8 + 8 = 16 total)
-NUM_CHOICES    = 4     # A B C D
+NUM_QUESTIONS  = 8
+NUM_CHOICES    = 4   # A B C D
 
-# How dark a bubble must be (0–1) to count as "filled"
-# 0.35 means 35% of the bubble area must be dark pixels
-FILL_THRESHOLD = 0.35
+# A bubble is "filled" if its darkness score is this many times
+# greater than the row average. Tune between 1.4–2.0.
+# Lower → more sensitive (catches light pencil marks)
+# Higher → less false positives on blank sheets
+RELATIVE_FACTOR = 1.4
 
-# Minimum pixels a bubble region must have to be valid
-MIN_BUBBLE_PX  = 80
-# =========================================================
+# Skip leftmost fraction of each half (the Q01/Q02 label column)
+LABEL_SKIP_FRAC = 0.22
+# ==========================================================
 
 
 def process_omr_sheet(image):
-    """
-    Entry point called by app.py.
-    Returns the standard JSON-ready dict.
-    """
     h, w = image.shape[:2]
 
-    # ── Step 1: find the answer-table region ─────────────────────────────────
-    table_roi = _find_answer_table(image)
+    table = _crop_answer_table(image)
+    th, tw = table.shape[:2]
 
-    if table_roi is None:
-        # Fallback: use bottom 65% of the image (where the table always is)
-        top = int(h * 0.30)
-        table_roi = image[top:, :]
+    gray    = cv2.cvtColor(table, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    thresh  = cv2.adaptiveThreshold(
+        blurred, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        blockSize=15, C=4
+    )
 
-    th, tw = table_roi.shape[:2]
+    mid = _find_split(thresh, tw)
 
-    # ── Step 2: split table into LEFT (Part-I) and RIGHT (Part-II) ───────────
-    # Your sheet has a thin vertical divider roughly in the middle.
-    # We find the best split column instead of assuming w//2.
-    mid = _find_vertical_split(table_roi)
+    label_skip_l = int(mid * LABEL_SKIP_FRAC)
+    label_skip_r = int((tw - mid) * LABEL_SKIP_FRAC)
 
-    left_half  = table_roi[:, :mid]
-    right_half = table_roi[:, mid:]
+    left_thresh  = thresh[:, label_skip_l : mid]
+    right_thresh = thresh[:, mid + label_skip_r :]
 
-    # ── Step 3: read answers from each half ───────────────────────────────────
-    part1_answers, b1, dbg1 = _read_answers_grid(left_half,  "Part-I",  start_q=1)
-    part2_answers, b2, dbg2 = _read_answers_grid(right_half, "Part-II", start_q=9)
+    part1, b1, dbg1 = _read_part(left_thresh,  "Part-I",  start=1)
+    part2, b2, dbg2 = _read_part(right_thresh, "Part-II", start=1)
 
-    # ── Debug: save side-by-side debug image ─────────────────────────────────
-    _save_debug(table_roi, left_half, right_half, dbg1, dbg2, mid)
+    _save_debug(dbg1, dbg2, "debug_omr.jpg")
 
     return {
         "success": True,
-        "part1":   part1_answers,
-        "part2":   part2_answers,
+        "part1":   part1,
+        "part2":   part2,
         "debug_info": {
             "perspective_corrected": False,
             "bubbles_found_part1":   b1,
@@ -76,320 +74,206 @@ def process_omr_sheet(image):
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  STEP 1 — Find the answer table rectangle
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _find_answer_table(image):
-    """
-    Tries to isolate just the bubble-grid area.
-    Looks for the large bordered rectangle that contains the bubbles.
-    Falls back gracefully if not found.
-    """
-    gray    = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges   = cv2.Canny(blurred, 30, 100)
-
-    # Dilate to close gaps in table borders
-    kernel = np.ones((3, 3), np.uint8)
-    edges  = cv2.dilate(edges, kernel, iterations=1)
+def _crop_answer_table(image):
+    h, w = image.shape[:2]
+    gray  = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 30, 100)
+    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    h, w = image.shape[:2]
-    min_area = (w * h) * 0.15   # table should be at least 15% of image
-    max_area = (w * h) * 0.90
-
     best = None
     best_area = 0
-
     for c in contours:
         area = cv2.contourArea(c)
-        if area < min_area or area > max_area:
+        if area < w * h * 0.10 or area > w * h * 0.92:
             continue
         x, y, cw, ch = cv2.boundingRect(c)
-        # Table should be wider than tall (landscape orientation)
-        if cw < ch:
-            continue
-        # Should span most of the width
-        if cw < w * 0.5:
+        if cw < w * 0.40 or cw < ch:
             continue
         if area > best_area:
             best_area = area
             best = (x, y, cw, ch)
 
     if best is None:
-        return None
+        return image[int(h * 0.30):, :]
 
     x, y, cw, ch = best
-    # Add small padding
     pad = 4
-    x  = max(0, x - pad)
-    y  = max(0, y - pad)
-    cw = min(w - x, cw + pad * 2)
-    ch = min(h - y, ch + pad * 2)
-
-    return image[y:y+ch, x:x+cw]
+    return image[max(0,y-pad): min(h,y+ch+pad),
+                 max(0,x-pad): min(w,x+cw+pad)]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  STEP 2 — Find vertical split between Part-I and Part-II
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _find_vertical_split(table_img):
-    """
-    Finds the column that has the most vertical dark pixels —
-    that's the divider line between Part-I and Part-II.
-    Searches only in the central 20–80% of the width to avoid edges.
-    """
-    gray = cv2.cvtColor(table_img, cv2.COLOR_BGR2GRAY)
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    h, w = bw.shape
-    # Sum dark pixels in each column
-    col_sum = np.sum(bw, axis=0).astype(np.float32)
-
-    # Only look in central band
-    lo = int(w * 0.35)
-    hi = int(w * 0.65)
-    search = col_sum[lo:hi]
-
-    # Find the column with the most dark pixels (the divider)
-    best_col = int(np.argmax(search)) + lo
-
-    return best_col
+def _find_split(thresh, width):
+    col_sum = np.sum(thresh, axis=0).astype(np.float64)
+    lo, hi  = int(width * 0.30), int(width * 0.70)
+    return int(np.argmax(col_sum[lo:hi])) + lo
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  STEP 3 — Grid-based bubble reading (the main fix)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _read_answers_grid(half_img, part_name, start_q=1):
-    """
-    Instead of hunting for contours, we:
-      1. Detect all bubble-like circles
-      2. Cluster them into a clean NUM_QUESTIONS × NUM_CHOICES grid
-      3. Measure darkness inside each bubble cell
-      4. Pick the darkest one per row as the answer
-    """
-    gray    = cv2.cvtColor(half_img, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # Invert: bubbles become white on black background
-    _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    # Clean up noise
-    kernel = np.ones((2, 2), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    # ── Find all bubble candidates ────────────────────────────────────────────
-    bubbles = _detect_bubbles(thresh, half_img.shape[:2])
-
-    debug_img = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-    answers   = {}
-
-    if len(bubbles) < NUM_QUESTIONS * NUM_CHOICES // 2:
-        # Not enough bubbles found — fill with None
-        for i in range(NUM_QUESTIONS):
-            qkey = f"Q{str(start_q + i).zfill(2)}"
-            answers[qkey] = None
-        return answers, len(bubbles), debug_img
-
-    # ── Build grid: cluster bubbles into rows and columns ─────────────────────
-    grid = _build_grid(bubbles, NUM_QUESTIONS, NUM_CHOICES)
-
-    # ── Score each bubble ─────────────────────────────────────────────────────
+def _read_part(thresh_half, part_name, start=1):
     choices = ['A', 'B', 'C', 'D']
+    answers = {f"Q{str(i).zfill(2)}": None for i in range(start, start + NUM_QUESTIONS)}
 
-    for q_idx, row_bubbles in enumerate(grid):
-        qnum = start_q + q_idx
-        qkey = f"Q{str(qnum).zfill(2)}"
+    h, w   = thresh_half.shape
+    bubbles = _find_bubble_candidates(thresh_half)
+    grid    = _cluster_to_grid(bubbles, NUM_QUESTIONS, NUM_CHOICES, w, h)
 
-        if not row_bubbles or len(row_bubbles) < NUM_CHOICES:
-            answers[qkey] = None
-            continue
+    debug = cv2.cvtColor(thresh_half, cv2.COLOR_GRAY2BGR)
+    filled_count = 0
 
-        # Sort row by X so columns are A B C D left→right
-        row_bubbles = sorted(row_bubbles, key=lambda b: b[0])
+    for q_idx, row in enumerate(grid):
+        qkey = f"Q{str(start + q_idx).zfill(2)}"
 
-        scores = []
-        for (bx, by, bw, bh) in row_bubbles:
-            score = _darkness_score(thresh, bx, by, bw, bh)
-            scores.append(score)
+        used_fallback = not row or len(row) < NUM_CHOICES
+        if used_fallback:
+            row = _make_fallback_row(q_idx, w, h)
 
-            # Draw bubble on debug image
-            cx, cy = bx + bw // 2, by + bh // 2
-            cv2.circle(debug_img, (cx, cy), max(bw, bh) // 2, (0, 200, 0), 1)
+        row_sorted = sorted(row, key=lambda b: b[0])[:NUM_CHOICES]
 
-        # The filled bubble is the one with the highest darkness score
+        # Score each bubble
+        scores = [_interior_darkness(thresh_half, b[0], b[1], b[2], b[3])
+                  for b in row_sorted]
+
+        # Draw all bubbles
+        for b in row_sorted:
+            cv2.rectangle(debug, (b[0],b[1]), (b[0]+b[2], b[1]+b[3]), (0,180,0), 1)
+
+        # Relative decision
+        avg_score = sum(scores) / len(scores) if scores else 0
         max_score = max(scores)
+        best_idx  = int(np.argmax(scores))
 
-        # Only count as filled if it's meaningfully darker than the threshold
-        if max_score < FILL_THRESHOLD:
-            answers[qkey] = None  # nothing filled
-        else:
-            # Check for multiple fills (INVALID)
-            # A second bubble counts as filled if it's ≥70% as dark as the darkest
-            filled_indices = [
-                i for i, s in enumerate(scores)
-                if s >= FILL_THRESHOLD and s >= max_score * 0.70
-            ]
-            if len(filled_indices) == 1:
-                answers[qkey] = choices[filled_indices[0]]
-                # Highlight the filled bubble in red on debug image
-                bx, by, bw, bh = row_bubbles[filled_indices[0]]
-                cx, cy = bx + bw // 2, by + bh // 2
-                cv2.circle(debug_img, (cx, cy), max(bw, bh) // 2, (0, 0, 255), 2)
-                cv2.putText(debug_img, choices[filled_indices[0]],
-                            (cx - 6, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                            (0, 0, 255), 1)
-            else:
-                answers[qkey] = "INVALID"
+        if not used_fallback and avg_score > 0 and (max_score / avg_score) >= RELATIVE_FACTOR:
+            answers[qkey] = choices[best_idx]
+            filled_count += 1
+            bx, by, bw, bh = row_sorted[best_idx]
+            cv2.rectangle(debug, (bx,by), (bx+bw, by+bh), (0,0,255), 2)
+            cv2.putText(debug, choices[best_idx], (bx+2, by+bh-2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
 
-    # Fill any gaps
-    for i in range(NUM_QUESTIONS):
-        qkey = f"Q{str(start_q + i).zfill(2)}"
-        if qkey not in answers:
-            answers[qkey] = None
-
-    cv2.imwrite(f"debug_{part_name}.jpg", debug_img)
-    return answers, len(bubbles), debug_img
+    cv2.imwrite(f"debug_{part_name}.jpg", debug)
+    return answers, filled_count, debug
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
+def _find_bubble_candidates(thresh):
+    h, w = thresh.shape
+    min_w = max(8,  int(w * 0.03))
+    max_w = min(80, int(w * 0.25))
+    min_h = max(8,  int(h * 0.01))
+    max_h = min(80, int(h * 0.12))
 
-def _detect_bubbles(thresh, img_shape):
-    """
-    Finds all bubble-shaped regions using contours.
-    More permissive than before — we rely on the grid builder to reject noise.
-    """
-    h, w = img_shape
     contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Expected bubble size: roughly 1/6 of half-width per bubble column
-    # For a typical sheet, each bubble is ~20–60px wide
-    min_dim  = max(8,  int(w * 0.01))
-    max_dim  = max(80, int(w * 0.15))
-    min_area = min_dim * min_dim
-    max_area = max_dim * max_dim * 2
-
     bubbles = []
     for c in contours:
-        area = cv2.contourArea(c)
-        if area < min_area or area > max_area:
-            continue
         x, y, bw, bh = cv2.boundingRect(c)
-        if bw < min_dim or bh < min_dim:
+        if not (min_w <= bw <= max_w and min_h <= bh <= max_h):
             continue
-        # Must be roughly circular (aspect ratio close to 1)
         ar = bw / float(bh)
-        if ar < 0.40 or ar > 2.5:
+        if ar < 0.45 or ar > 2.2:
+            continue
+        if cv2.contourArea(c) < min_w * min_h * 0.25:
             continue
         bubbles.append((x, y, bw, bh))
 
-    return bubbles
+    return _deduplicate(bubbles)
 
 
-def _build_grid(bubbles, num_rows, num_cols):
-    """
-    Clusters detected bubbles into a num_rows × num_cols grid.
+def _deduplicate(bubbles, overlap=0.35):
+    if not bubbles:
+        return bubbles
+    bubbles = sorted(bubbles, key=lambda b: -(b[2]*b[3]))
+    kept = []
+    for b in bubbles:
+        bx, by, bw, bh = b
+        skip = False
+        for k in kept:
+            kx, ky, kw, kh = k
+            ix = max(0, min(bx+bw, kx+kw) - max(bx, kx))
+            iy = max(0, min(by+bh, ky+kh) - max(by, ky))
+            inter = ix * iy
+            union = bw*bh + kw*kh - inter
+            if union > 0 and inter/union > overlap:
+                skip = True
+                break
+        if not skip:
+            kept.append(b)
+    return kept
 
-    Strategy:
-      1. Sort bubbles by Y → group into rows using median Y clustering
-      2. Within each row, sort by X → columns are A B C D
-      3. Keep exactly num_cols bubbles per row (the rightmost extras discarded)
-    """
+
+def _cluster_to_grid(bubbles, num_rows, num_cols, img_w, img_h):
     if not bubbles:
         return [[] for _ in range(num_rows)]
 
-    # ── Cluster by Y coordinate ───────────────────────────────────────────────
-    # Use bubble centers
-    centers_y = sorted(set(b[1] + b[3] // 2 for b in bubbles))
-
-    # Merge Y values that are close together (same row)
-    row_ys    = []
-    current_y = centers_y[0]
-    group     = [current_y]
-
-    for cy in centers_y[1:]:
-        if cy - current_y < 25:   # within 25px → same row
-            group.append(cy)
+    bubbles_cy = sorted(bubbles, key=lambda b: b[1] + b[3]//2)
+    row_groups  = []
+    current = [bubbles_cy[0]]
+    for b in bubbles_cy[1:]:
+        cy_prev = current[-1][1] + current[-1][3]//2
+        cy_cur  = b[1] + b[3]//2
+        if abs(cy_cur - cy_prev) < 18:
+            current.append(b)
         else:
-            row_ys.append(int(np.mean(group)))
-            group = [cy]
-        current_y = cy
-    row_ys.append(int(np.mean(group)))
+            row_groups.append(current)
+            current = [b]
+    row_groups.append(current)
 
-    # ── Assign each bubble to its nearest row ─────────────────────────────────
-    rows = {ry: [] for ry in row_ys}
-    for b in bubbles:
-        cy     = b[1] + b[3] // 2
-        nearest = min(row_ys, key=lambda ry: abs(ry - cy))
-        rows[nearest].append(b)
-
-    # ── Sort rows by Y, keep only num_rows question rows ──────────────────────
-    sorted_rows = sorted(rows.items(), key=lambda kv: kv[0])
-
-    # Filter out rows with too few bubbles (headers, labels, etc.)
-    question_rows = [(ry, bs) for ry, bs in sorted_rows if len(bs) >= 2]
-
-    # Take the num_rows rows that have the most bubbles
-    question_rows.sort(key=lambda kv: -len(kv[1]))
-    question_rows = question_rows[:num_rows]
-    # Re-sort by Y so Q01 comes first
-    question_rows.sort(key=lambda kv: kv[0])
+    row_groups = [r for r in row_groups if len(r) >= 2]
+    row_groups.sort(key=lambda r: -len(r))
+    chosen = row_groups[:num_rows]
+    chosen.sort(key=lambda r: sum(b[1]+b[3]//2 for b in r)/len(r))
 
     grid = []
-    for _, row_bubbles in question_rows:
-        # Sort by X (left→right = A B C D)
-        row_sorted = sorted(row_bubbles, key=lambda b: b[0])
-        # Keep only the first num_cols (drop any extra noise)
-        grid.append(row_sorted[:num_cols])
+    for row in chosen:
+        row_x = sorted(row, key=lambda b: b[0])
+        if len(row_x) > num_cols:
+            row_x = _pick_best_n_cols(row_x, num_cols)
+        grid.append(row_x[:num_cols])
 
-    # Pad with empty rows if we didn't find enough
     while len(grid) < num_rows:
         grid.append([])
-
     return grid
 
 
-def _darkness_score(thresh, x, y, w, h):
-    """
-    Returns fraction of dark pixels inside a bubble region (0.0 – 1.0).
-    Uses a slightly shrunk ROI to avoid counting the bubble border itself.
-    """
-    # Shrink by ~15% on each side to avoid the printed circle border
-    shrink_x = max(1, int(w * 0.15))
-    shrink_y = max(1, int(h * 0.15))
+def _pick_best_n_cols(bubbles_in_row, n):
+    from itertools import combinations
+    if len(bubbles_in_row) <= n:
+        return bubbles_in_row
+    xs = [b[0] + b[2]//2 for b in bubbles_in_row]
+    best_combo, best_var = None, float('inf')
+    for combo in combinations(range(len(bubbles_in_row)), n):
+        sel = sorted([xs[i] for i in combo])
+        gaps = [sel[i+1]-sel[i] for i in range(len(sel)-1)]
+        v = float(np.var(gaps))
+        if v < best_var:
+            best_var = v
+            best_combo = combo
+    return [bubbles_in_row[i] for i in sorted(best_combo)]
 
-    x1 = max(0, x + shrink_x)
-    y1 = max(0, y + shrink_y)
-    x2 = min(thresh.shape[1], x + w - shrink_x)
-    y2 = min(thresh.shape[0], y + h - shrink_y)
 
+def _make_fallback_row(q_idx, img_w, img_h):
+    row_h = img_h / NUM_QUESTIONS
+    col_w = img_w / NUM_CHOICES
+    return [(int(c*col_w + col_w*0.15), int(q_idx*row_h + row_h*0.15),
+             int(col_w*0.70), int(row_h*0.70)) for c in range(NUM_CHOICES)]
+
+
+def _interior_darkness(thresh, x, y, w, h):
+    sx = max(1, int(w * 0.20))
+    sy = max(1, int(h * 0.20))
+    x1, y1 = max(0, x+sx), max(0, y+sy)
+    x2, y2 = min(thresh.shape[1], x+w-sx), min(thresh.shape[0], y+h-sy)
     if x2 <= x1 or y2 <= y1:
         return 0.0
-
-    roi   = thresh[y1:y2, x1:x2]
-    total = roi.size
-    if total < MIN_BUBBLE_PX:
-        return 0.0
-
-    dark  = cv2.countNonZero(roi)
-    return dark / total
+    roi = thresh[y1:y2, x1:x2]
+    return int(cv2.countNonZero(roi)) / max(roi.size, 1)
 
 
-def _save_debug(table_img, left_half, right_half, dbg1, dbg2, mid):
-    """Saves a composite debug image showing both halves with detections."""
+def _save_debug(dbg1, dbg2, filename):
     try:
-        # Resize debug images to match table height
-        th = table_img.shape[0]
-        d1 = cv2.resize(dbg1, (left_half.shape[1],  th))
-        d2 = cv2.resize(dbg2, (right_half.shape[1], th))
-        composite = np.hstack([d1, d2])
-        cv2.imwrite("debug_full_table.jpg", composite)
-        cv2.imwrite("debug_table_original.jpg", table_img)
+        h1, w1 = dbg1.shape[:2]
+        h2, w2 = dbg2.shape[:2]
+        th = max(h1, h2)
+        d1 = cv2.resize(dbg1,(w1,th)) if h1!=th else dbg1
+        d2 = cv2.resize(dbg2,(w2,th)) if h2!=th else dbg2
+        cv2.imwrite(filename, np.hstack([d1,d2]))
     except Exception:
-        pass  # debug saving should never crash the server
+        pass

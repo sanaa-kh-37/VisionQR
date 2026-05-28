@@ -299,117 +299,159 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   }
 
   // ====================== UPDATED OMR GRADE SECTION ======================
+  // =====================================================================
+// REPLACE _buildOmrGradeSection in scanner_screen.dart with this version
+// =====================================================================
+//
+// FIXES:
+//   1. Part-I graded against part1 OMR, Part-II against part2 OMR separately
+//   2. Key normalisation: "Q1" == "Q01" (answer key may use Q1, OMR uses Q01)
+//   3. Clear two-section display: Part-I results, then Part-II results
+
   Widget _buildOmrGradeSection(AnswerKey key, OmrResult? omr) {
     if (omr == null) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 16),
         child: Text(
-          "⚠ OMR grading unavailable\n(Server is offline)",
+          "⚠ OMR grading unavailable\n(Server offline or scan skipped)",
           style: TextStyle(color: Colors.orangeAccent, fontSize: 14),
           textAlign: TextAlign.center,
         ),
       );
     }
 
-    // Original logic (when OMR is available)
-    final studentAnswers = {...omr.part1, ...omr.part2};
-    final correctAnswers = {...key.part1, ...key.part2};
+    // Normalise a key like "Q1" or "Q01" → "Q01"
+    String _norm(String k) {
+      final digits = k.replaceAll(RegExp(r'[^0-9]'), '');
+      return 'Q${digits.padLeft(2, '0')}';
+    }
 
-    int correct = 0, wrong = 0, invalid = 0, blank = 0;
+    // Build normalised maps
+    final keyPart1 = { for (var e in key.part1.entries) _norm(e.key): e.value };
+    final keyPart2 = { for (var e in key.part2.entries) _norm(e.key): e.value };
+    final omrPart1 = { for (var e in omr.part1.entries) _norm(e.key): e.value };
+    final omrPart2 = { for (var e in omr.part2.entries) _norm(e.key): e.value };
+
+    int correct = 0, wrong = 0, blank = 0;
+
+    // Grade one part, returns list of row widgets
+    List<Widget> _gradeRows(
+        Map<String, String> keyMap, Map<String, String?> omrMap) {
+      return keyMap.entries.map((entry) {
+        final qKey       = entry.key;
+        final correctAns = entry.value;
+        final studentAns = omrMap[qKey];
+
+        Color    color;
+        IconData icon;
+        String   display;
+
+        if (studentAns == null) {
+          blank++;
+          color   = Colors.white24;
+          icon    = Icons.remove;
+          display = "—";
+        } else if (studentAns == correctAns) {
+          correct++;
+          color   = Colors.greenAccent;
+          icon    = Icons.check_circle_rounded;
+          display = studentAns;
+        } else {
+          wrong++;
+          color   = Colors.redAccent;
+          icon    = Icons.cancel_rounded;
+          display = studentAns;
+        }
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withOpacity(0.2)),
+          ),
+          child: Row(children: [
+            SizedBox(
+              width: 40,
+              child: Text(qKey,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            ),
+            Text("Key: $correctAns  ",
+                style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            Text("Got: $display",
+                style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12)),
+            const Spacer(),
+            Icon(icon, color: color, size: 16),
+          ]),
+        );
+      }).toList();
+    }
+
+    final part1Rows = _gradeRows(keyPart1, omrPart1);
+    final part2Rows = _gradeRows(keyPart2, omrPart2);
+    final totalQ    = keyPart1.length + keyPart2.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Divider(color: Colors.white12),
         const SizedBox(height: 12),
+
+        // Header
         Row(children: [
           const Icon(Icons.auto_awesome, color: Colors.greenAccent, size: 16),
           const SizedBox(width: 8),
           Text(
             "Auto-Graded Results",
             style: GoogleFonts.spaceGrotesk(
-              fontWeight: FontWeight.bold,
-              color: Colors.greenAccent,
-              fontSize: 15,
-            ),
+                fontWeight: FontWeight.bold,
+                color: Colors.greenAccent,
+                fontSize: 15),
           ),
         ]),
-        const SizedBox(height: 12),
-
-        ...correctAnswers.entries.map((entry) {
-          final qKey    = entry.key;
-          final correct_ans = entry.value;
-          final student_ans = studentAnswers[qKey];
-
-          Color color;
-          IconData icon;
-          String display;
-
-          if (student_ans == null) {
-            blank++;
-            color = Colors.white24;
-            icon  = Icons.remove;
-            display = "—";
-          } else if (student_ans == "INVALID") {
-            invalid++;
-            color = Colors.orangeAccent;
-            icon  = Icons.warning_amber_rounded;
-            display = "⚠";
-          } else if (student_ans == correct_ans) {
-            correct++;
-            color = Colors.greenAccent;
-            icon  = Icons.check_circle_rounded;
-            display = student_ans;
-          } else {
-            wrong++;
-            color = Colors.redAccent;
-            icon  = Icons.cancel_rounded;
-            display = student_ans;
-          }
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.07),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: color.withOpacity(0.2)),
-            ),
-            child: Row(children: [
-              SizedBox(
-                width: 40,
-                child: Text(qKey, style: const TextStyle(color: Colors.white54, fontSize: 12)),
-              ),
-              Text("Key: $correct_ans  ", style: const TextStyle(color: Colors.white54, fontSize: 12)),
-              Text("Got: $display", style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12)),
-              const Spacer(),
-              Icon(icon, color: color, size: 16),
-            ]),
-          );
-        }),
-
         const SizedBox(height: 16),
 
+        // Part-I
+        Text("Part - I",
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: Colors.blueAccent)),
+        const SizedBox(height: 8),
+        ...part1Rows,
+        const SizedBox(height: 16),
+
+        // Part-II
+        Text("Part - II",
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: Colors.blueAccent)),
+        const SizedBox(height: 8),
+        ...part2Rows,
+        const SizedBox(height: 16),
+
+        // Score summary chips
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
             _scoreChip("$correct", "Correct", Colors.greenAccent),
             _scoreChip("$wrong",   "Wrong",   Colors.redAccent),
-            _scoreChip("$invalid", "Invalid", Colors.orangeAccent),
             _scoreChip("$blank",   "Blank",   Colors.white24),
           ],
         ),
-
         const SizedBox(height: 8),
-
         Center(
           child: Text(
-            "Score: $correct / ${correctAnswers.length}",
+            "Score: $correct / $totalQ",
             style: GoogleFonts.spaceGrotesk(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-            ),
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.white),
           ),
         ),
       ],

@@ -9,6 +9,7 @@ import '../models/scanned_code.dart';
 import '../models/answer_key.dart';
 import '../services/history_database.dart';
 import '../services/ocr_service.dart';
+import '../services/omr_service.dart';
 
 class ScannerScreen extends StatefulWidget {
   final bool isScanning;
@@ -23,6 +24,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   final MobileScannerController _controller = MobileScannerController(autoStart: false);
   final OcrService _ocrService = OcrService();
   final ImagePicker _picker = ImagePicker();
+  final OmrService _omrService = OmrService();
 
   bool _isFlashOn = false;
   bool _isARActive = true;
@@ -103,64 +105,122 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
-  Future<StudentInfo?> _promptForOcr() async {
-    // Stop scanner while taking photo
+  Future<({StudentInfo? student, OmrResult? omr})> _promptForOcrAndOmr() async {
     _controller.stop();
 
-    StudentInfo? info;
-    bool skipOcr = false;
+    StudentInfo? studentInfo;
+    OmrResult?   omrResult;
 
     await showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E293B),
-        title: Text("Quiz QR Detected!", style: GoogleFonts.spaceGrotesk(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: const Text("Would you like to scan the student's handwritten Name and Registration Number from this paper?", style: TextStyle(color: Colors.white70)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          "Quiz Sheet Detected!",
+          style: GoogleFonts.spaceGrotesk(
+              color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              "Capture the OMR sheet to auto-grade bubble answers and read student info.",
+              style: TextStyle(color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            // Server status indicator
+            FutureBuilder<bool>(
+              future: OmrService().isServerAlive(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Row(children: [
+                    SizedBox(width:12, height:12, child: CircularProgressIndicator(strokeWidth:1.5)),
+                    SizedBox(width: 8),
+                    Text("Checking server...", style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  ]);
+                }
+                final alive = snap.data ?? false;
+                return Row(children: [
+                  Icon(
+                    alive ? Icons.check_circle : Icons.error_outline,
+                    color: alive ? Colors.greenAccent : Colors.orangeAccent,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      alive
+                          ? "OMR server online"
+                          : "OMR server offline\n(Grading will be skipped)",
+                      style: TextStyle(
+                        color: alive ? Colors.greenAccent : Colors.orangeAccent,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ]);
+              },
+            ),
+          ],
+        ),
         actions: [
           TextButton(
-            onPressed: () {
-              skipOcr = true;
-              Navigator.pop(context);
-            },
+            onPressed: () => Navigator.pop(context),
             child: const Text("Skip", style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
             onPressed: () async {
-              final XFile? photo = await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
-              if (photo != null) {
-                // Show loading
-                if (context.mounted) {
-                  showDialog(
-                    context: context,
-                    barrierDismissible: false,
-                    builder: (ctx) => const Center(child: CircularProgressIndicator()),
-                  );
-                }
+              final XFile? photo = await _picker.pickImage(
+                source: ImageSource.camera,
+                imageQuality: 90,
+              );
+              if (photo == null) return;
 
-                try {
-                  info = await _ocrService.extractStudentInfo(File(photo.path));
-                } catch (_) {}
+              if (context.mounted) {
+                showDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => const Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text("Scanning bubbles...",
+                            style: TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+                );
+              }
 
-                if (context.mounted) {
-                  Navigator.pop(context); // close loading
-                  Navigator.pop(context); // close choice dialog
-                }
+              final imageFile = File(photo.path);
+
+              final results = await Future.wait([
+                _ocrService.extractStudentInfo(imageFile),
+                _omrService.scanSheet(imageFile),
+              ]);
+
+              studentInfo = results[0] as StudentInfo?;
+              omrResult   = results[1] as OmrResult?;
+
+              if (context.mounted) {
+                Navigator.pop(context); // close loading
+                Navigator.pop(context); // close dialog
               }
             },
-            child: const Text("Capture & OCR", style: TextStyle(color: Colors.white)),
+            child: const Text("Capture Sheet",
+                style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
 
-    // Resume scanner if needed
-    if (widget.isScanning) {
-      _controller.start();
-    }
-
-    return info;
+    if (widget.isScanning) _controller.start();
+    return (student: studentInfo, omr: omrResult);
   }
 
   void _processScannedPayload(String rawValue) async {
@@ -169,26 +229,26 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
       final answerKey = AnswerKey.fromPayload(rawValue);
 
-      // Trigger OCR logic
-      final StudentInfo? studentInfo = await _promptForOcr();
+      final scanResult = await _promptForOcrAndOmr();
 
       final newItem = ScannedCode(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        type: 'answer_key',
-        value: rawValue,
-        title: answerKey.quizTitle,
-        studentName: studentInfo?.name,
-        studentRegNo: studentInfo?.regNo,
-        dateTime: "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} "
-            "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+        id          : DateTime.now().millisecondsSinceEpoch.toString(),
+        type        : 'answer_key',
+        value       : rawValue,
+        title       : answerKey.quizTitle,
+        studentName : scanResult.student?.name,
+        studentRegNo: scanResult.student?.regNo,
+        dateTime    : _formatNow(),
+        omrPart1    : scanResult.omr?.part1,
+        omrPart2    : scanResult.omr?.part2,
       );
 
       await HistoryDatabase.saveItem(newItem);
-      _showAnswerKeyBottomSheet(answerKey, newItem);
+      _showAnswerKeyBottomSheet(answerKey, newItem, scanResult.omr);
       return;
     }
 
-    // Normal processing
+    // Normal processing (unchanged)
     String type = 'text';
     String title = 'Scanned Text';
 
@@ -238,6 +298,140 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
+  // ====================== UPDATED OMR GRADE SECTION ======================
+  Widget _buildOmrGradeSection(AnswerKey key, OmrResult? omr) {
+    if (omr == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Text(
+          "⚠ OMR grading unavailable\n(Server is offline)",
+          style: TextStyle(color: Colors.orangeAccent, fontSize: 14),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    // Original logic (when OMR is available)
+    final studentAnswers = {...omr.part1, ...omr.part2};
+    final correctAnswers = {...key.part1, ...key.part2};
+
+    int correct = 0, wrong = 0, invalid = 0, blank = 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(color: Colors.white12),
+        const SizedBox(height: 12),
+        Row(children: [
+          const Icon(Icons.auto_awesome, color: Colors.greenAccent, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            "Auto-Graded Results",
+            style: GoogleFonts.spaceGrotesk(
+              fontWeight: FontWeight.bold,
+              color: Colors.greenAccent,
+              fontSize: 15,
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+
+        ...correctAnswers.entries.map((entry) {
+          final qKey    = entry.key;
+          final correct_ans = entry.value;
+          final student_ans = studentAnswers[qKey];
+
+          Color color;
+          IconData icon;
+          String display;
+
+          if (student_ans == null) {
+            blank++;
+            color = Colors.white24;
+            icon  = Icons.remove;
+            display = "—";
+          } else if (student_ans == "INVALID") {
+            invalid++;
+            color = Colors.orangeAccent;
+            icon  = Icons.warning_amber_rounded;
+            display = "⚠";
+          } else if (student_ans == correct_ans) {
+            correct++;
+            color = Colors.greenAccent;
+            icon  = Icons.check_circle_rounded;
+            display = student_ans;
+          } else {
+            wrong++;
+            color = Colors.redAccent;
+            icon  = Icons.cancel_rounded;
+            display = student_ans;
+          }
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.07),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: color.withOpacity(0.2)),
+            ),
+            child: Row(children: [
+              SizedBox(
+                width: 40,
+                child: Text(qKey, style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              ),
+              Text("Key: $correct_ans  ", style: const TextStyle(color: Colors.white54, fontSize: 12)),
+              Text("Got: $display", style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12)),
+              const Spacer(),
+              Icon(icon, color: color, size: 16),
+            ]),
+          );
+        }),
+
+        const SizedBox(height: 16),
+
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _scoreChip("$correct", "Correct", Colors.greenAccent),
+            _scoreChip("$wrong",   "Wrong",   Colors.redAccent),
+            _scoreChip("$invalid", "Invalid", Colors.orangeAccent),
+            _scoreChip("$blank",   "Blank",   Colors.white24),
+          ],
+        ),
+
+        const SizedBox(height: 8),
+
+        Center(
+          child: Text(
+            "Score: $correct / ${correctAnswers.length}",
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _scoreChip(String count, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(children: [
+        Text(count, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(label, style: TextStyle(color: color.withOpacity(0.7), fontSize: 10)),
+      ]),
+    );
+  }
+
+  // ... Rest of your file remains the same (build, _showAnswerKeyBottomSheet, etc.)
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -385,7 +579,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   }
 
   // ====================== ANSWER KEY SHEET ======================
-  void _showAnswerKeyBottomSheet(AnswerKey key, ScannedCode code) {
+  void _showAnswerKeyBottomSheet(AnswerKey key, ScannedCode code, [OmrResult? omr]) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -405,8 +599,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
             children: [
               Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
               const SizedBox(height: 20),
-              
-              // Student Info Header (OCR Result)
+
               if (code.studentName != null || code.studentRegNo != null)
                 Container(
                   margin: const EdgeInsets.only(bottom: 20),
@@ -424,10 +617,10 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(code.studentName ?? "Name Not Found", 
-                              style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                            Text("Registration: ${code.studentRegNo ?? "N/A"}", 
-                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
+                            Text(code.studentName ?? "Name Not Found",
+                                style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                            Text("Registration: ${code.studentRegNo ?? "N/A"}",
+                                style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
                           ],
                         ),
                       ),
@@ -445,6 +638,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
                     _buildPart("Part - I", key.part1),
                     const SizedBox(height: 24),
                     _buildPart("Part - II", key.part2),
+                    if (omr != null || true) _buildOmrGradeSection(key, omr),  // Always call (handles null)
                   ],
                 ),
               ),
@@ -479,7 +673,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     );
   }
 
-  // ====================== NORMAL RESULT SHEET ======================
+  // ... (rest of _showResultBottomSheet and _buildTypeSpecificResult remains unchanged)
   void _showResultBottomSheet(ScannedCode code) {
     showModalBottomSheet(
       context: context,
@@ -627,4 +821,10 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         );
     }
   }
+}
+
+String _formatNow() {
+  final n = DateTime.now();
+  return "${n.year}-${n.month.toString().padLeft(2,'0')}-${n.day.toString().padLeft(2,'0')} "
+      "${n.hour.toString().padLeft(2,'0')}:${n.minute.toString().padLeft(2,'0')}";
 }

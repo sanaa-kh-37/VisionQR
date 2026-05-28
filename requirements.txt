@@ -1,0 +1,6 @@
+# requirements.txt
+# Install everything with:   pip install -r requirements.txt
+
+flask==3.0.3          # web server framework
+opencv-python==4.9.0.80   # computer vision (the OMR brain)
+numpy==1.26.4         # array math (used by OpenCV internally)

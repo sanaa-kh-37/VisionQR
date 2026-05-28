@@ -73,7 +73,5 @@ if __name__ == '__main__':
     print("=" * 50)
     print("  VisionQR OMR Server starting...")
     print("  URL: http://0.0.0.0:5000")
-    print("  Test: open http://localhost:5000/ping in browser")
     print("=" * 50)
-    # host='0.0.0.0' means accept connections from your phone on same WiFi
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)  # debug=False for production

@@ -76,8 +76,17 @@ class OmrService {
   // On Windows: run "ipconfig" in cmd → look for IPv4 Address
   // On Mac/Linux: run "ifconfig" → look for inet address
   // Example: OMR_SERVER_URL=http://192.168.1.105:5000
-  static String get _baseUrl =>
-      dotenv.env['OMR_SERVER_URL'] ?? 'http://192.168.1.14:5000';
+  // static String get _baseUrl =>
+  //     dotenv.env['OMR_SERVER_URL'] ?? 'http://192.168.1.14:5000';
+
+  static String get _baseUrl {
+    final url = dotenv.env['OMR_SERVER_URL'];
+    if (url != null && url.isNotEmpty) {
+      return url;
+    }
+    // Fallback only if .env is missing (for development)
+    return 'http://192.168.1.14:5000';   // You can keep this as backup
+  }
 
   // ─── Check if server is reachable ──────────────────────────────────────────
   // Call this before scanning to show a friendly error if server is offline

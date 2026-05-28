@@ -74,4 +74,6 @@ if __name__ == '__main__':
     print("  VisionQR OMR Server starting...")
     print("  URL: http://0.0.0.0:5000")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=False)  # debug=False for production
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

@@ -94,7 +94,7 @@ class OmrService {
     try {
       final response = await http
           .get(Uri.parse('$_baseUrl/ping'))
-          .timeout(const Duration(seconds: 4));
+          .timeout(const Duration(seconds: 60));
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -118,7 +118,7 @@ class OmrService {
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'image': base64Image}),
     )
-        .timeout(const Duration(seconds: 30));
+        .timeout(const Duration(seconds: 90));
     // 30 seconds is plenty — OpenCV is fast (~2-3 seconds per image)
 
     // Step 4: Parse response

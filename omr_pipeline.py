@@ -1,53 +1,42 @@
 """
-omr_pipeline.py — Gemini Flash Vision Edition
-===============================================
-Replaces fragile OpenCV bubble detection with Google Gemini Flash Vision.
-Gemini actually SEES the image and reads filled bubbles like a human.
+omr_pipeline.py — Gemini Flash Vision Edition (google-genai SDK)
+=================================================================
+Uses the NEW google-genai package (replaces deprecated google-generativeai).
 
 Part-I:  Q01–Q08  (keys: "Q01"…"Q08")
 Part-II: Q01–Q08  (keys: "Q01"…"Q08")
 
-SETUP:
-  Add to Render environment variables:
-      GEMINI_API_KEY=AIzaSy_your_key_here
-
-  app.py and all Flutter code stays EXACTLY THE SAME.
+SETUP — add to Render environment variables:
+    GEMINI_API_KEY=AIzaSy_your_key_here
 """
 
 import os
-import base64
 import json
 import re
 import cv2
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 NUM_QUESTIONS = 8  # per part
 
 # ── Configure Gemini client ───────────────────────────────────────────────────
-_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-genai.configure(api_key=_API_KEY)
-_model = genai.GenerativeModel("gemini-1.5-flash")
+_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PUBLIC ENTRY POINT  (called by app.py — signature unchanged)
 # ═══════════════════════════════════════════════════════════════════════════════
 def process_omr_sheet(image):
-    """
-    image  : numpy BGR array (from cv2.imdecode in app.py)
-    returns: dict that app.py sends back to Flutter — shape unchanged
-    """
     h, w = image.shape[:2]
 
-    # Encode numpy image → JPEG bytes (Gemini needs real image bytes)
+    # Encode numpy BGR image → JPEG bytes
     success, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
     if not success:
         raise RuntimeError("Could not encode image to JPEG")
 
     jpeg_bytes = buf.tobytes()
 
-    # Ask Gemini to read the bubble sheet
     part1, part2 = _ask_gemini(jpeg_bytes)
 
     answered1 = sum(1 for v in part1.values() if v not in (None, "INVALID"))
@@ -71,11 +60,6 @@ def process_omr_sheet(image):
 #  GEMINI VISION CALL
 # ═══════════════════════════════════════════════════════════════════════════════
 def _ask_gemini(jpeg_bytes: bytes):
-    """
-    Send bubble sheet image to Gemini Flash and parse the JSON response.
-    Returns (part1_dict, part2_dict).
-    """
-
     prompt = """You are an OMR (Optical Mark Recognition) expert reading a student quiz answer sheet photo.
 
 The sheet has TWO sections side by side:
@@ -92,7 +76,7 @@ RULES:
   - If MORE THAN ONE bubble is filled → return "INVALID"
   - Always include all 8 questions for both parts, even if answer is null.
 
-Return ONLY valid JSON — absolutely no explanation, no markdown, no extra text.
+Return ONLY valid JSON — no explanation, no markdown, no extra text.
 Use exactly this structure:
 
 {
@@ -118,14 +102,13 @@ Use exactly this structure:
   }
 }"""
 
-    image_part = {
-        "mime_type": "image/jpeg",
-        "data": jpeg_bytes,
-    }
-
-    response = _model.generate_content(
-        [prompt, image_part],
-        generation_config=genai.types.GenerationConfig(
+    response = _client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=[
+            types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"),
+            types.Part.from_text(text=prompt),
+        ],
+        config=types.GenerateContentConfig(
             temperature=0.0,
             max_output_tokens=512,
         ),
@@ -139,10 +122,6 @@ Use exactly this structure:
 #  RESPONSE PARSER
 # ═══════════════════════════════════════════════════════════════════════════════
 def _parse_response(raw: str):
-    """
-    Parse Gemini's JSON response into (part1_dict, part2_dict).
-    Handles markdown fences and minor formatting issues gracefully.
-    """
     cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
 
     try:
@@ -159,7 +138,6 @@ def _parse_response(raw: str):
 
     part1 = _normalise_part(data.get("part1", {}))
     part2 = _normalise_part(data.get("part2", {}))
-
     return part1, part2
 
 

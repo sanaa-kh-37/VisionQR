@@ -1,16 +1,9 @@
 // lib/services/omr_service.dart
 // =====================================================
-// This file is the Flutter side of the OMR system.
-// It sends the bubble sheet photo to the Python server
-// and returns structured answers back to scanner_screen.dart
-//
-// HOW IT WORKS:
-//   1. Flutter takes a photo (File object)
-//   2. We convert the photo to base64 (text)
-//   3. We POST that text to our Python server
-//   4. Server responds with JSON answers
-//   5. We parse the JSON into OmrResult object
-//   6. scanner_screen.dart uses OmrResult to grade the quiz
+// FIXES:
+//   1. ping timeout: 4s → 60s  (Render cold start takes 30-50s)
+//   2. scan timeout: 30s → 120s (Gemini Vision call takes extra time)
+//   3. Added wake-up ping BEFORE scanning so server is warm
 
 import 'dart:convert';
 import 'dart:io';
@@ -19,7 +12,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 // ─── Data model for the result ────────────────────────────────────────────────
 class OmrResult {
-  // part1 maps "Q01" → "A" | "B" | "C" | "D" | "INVALID" | null
   final Map<String, String?> part1;
   final Map<String, String?> part2;
   final bool perspectiveCorrected;
@@ -34,9 +26,7 @@ class OmrResult {
     this.bubblesFoundPart2   = 0,
   });
 
-  // Parse the JSON response from Python server into this object
   factory OmrResult.fromJson(Map<String, dynamic> json) {
-    // Helper: convert raw JSON map to Map<String, String?>
     Map<String, String?> parseAnswers(dynamic raw) {
       if (raw == null) return {};
       return (raw as Map<String, dynamic>)
@@ -54,13 +44,11 @@ class OmrResult {
     );
   }
 
-  // How many questions were answered (not null, not INVALID)
   int get totalAnswered =>
       [...part1.values, ...part2.values]
           .where((v) => v != null && v != 'INVALID')
           .length;
 
-  // How many were flagged as invalid (multiple bubbles)
   int get totalInvalid =>
       [...part1.values, ...part2.values]
           .where((v) => v == 'INVALID')
@@ -69,71 +57,61 @@ class OmrResult {
 
 // ─── The service class ────────────────────────────────────────────────────────
 class OmrService {
-  // Read server URL from .env file
-  // Add this line to your .env:   OMR_SERVER_URL=http://192.168.x.x:5000
-  //
-  // IMPORTANT: Use your PC's local IP address, NOT localhost
-  // On Windows: run "ipconfig" in cmd → look for IPv4 Address
-  // On Mac/Linux: run "ifconfig" → look for inet address
-  // Example: OMR_SERVER_URL=http://192.168.1.105:5000
-  // static String get _baseUrl =>
-  //     dotenv.env['OMR_SERVER_URL'] ?? 'http://192.168.1.14:5000';
 
   static String get _baseUrl {
     final url = dotenv.env['OMR_SERVER_URL'];
     if (url != null && url.isNotEmpty) {
       return url;
     }
-    // Fallback only if .env is missing (for development)
-    return 'http://192.168.1.14:5000';   // You can keep this as backup
+    return 'http://192.168.1.14:5000';
   }
 
-  // ─── Check if server is reachable ──────────────────────────────────────────
-  // Call this before scanning to show a friendly error if server is offline
+  // ─── Check if server is reachable ─────────────────────────────────────────
+  // FIX: timeout raised from 4s → 60s to survive Render cold start (30-50s)
   Future<bool> isServerAlive() async {
     try {
       final response = await http
           .get(Uri.parse('$_baseUrl/ping'))
-          .timeout(const Duration(seconds: 60));
+          .timeout(const Duration(seconds: 60)); // ← was 4, now 60
       return response.statusCode == 200;
     } catch (_) {
       return false;
     }
   }
 
-  // ─── Main method: send photo → get answers ─────────────────────────────────
-  Future<OmrResult?> scanSheet(File imageFile) async {
-    // Step 1: Read image bytes from disk
-    final bytes = await imageFile.readAsBytes();
+  // ─── Wake up the server silently before the user taps "Capture Sheet" ─────
+  // Call this as soon as the answer key QR is scanned, so by the time
+  // the user takes the photo the server is already warm.
+  Future<void> warmUp() async {
+    try {
+      await http
+          .get(Uri.parse('$_baseUrl/ping'))
+          .timeout(const Duration(seconds: 60));
+    } catch (_) {
+      // Ignore — this is just a best-effort wake-up call
+    }
+  }
 
-    // Step 2: Convert bytes to base64 string
-    // Base64 turns binary data into safe text that can go in JSON
-    // Example: [255, 216, 255] → "/9j/..."
+  // ─── Main method: send photo → get answers ────────────────────────────────
+  // FIX: timeout raised from 30s → 120s (Gemini Vision API call takes ~5-15s
+  //      on top of the network round-trip to Render)
+  Future<OmrResult?> scanSheet(File imageFile) async {
+    final bytes       = await imageFile.readAsBytes();
     final base64Image = base64Encode(bytes);
 
-    // Step 3: Send POST request to Python server
-    final response = await http
-        .post(
-      Uri.parse('$_baseUrl/scan-omr'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'image': base64Image}),
-    )
-        .timeout(const Duration(seconds: 90));
-    // 30 seconds is plenty — OpenCV is fast (~2-3 seconds per image)
-
-    // Step 4: Parse response
-    if (response.statusCode != 200) {
-      // Server returned an error
-      return null;
-    }
-
     try {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final response = await http
+          .post(
+        Uri.parse('$_baseUrl/scan-omr'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'image': base64Image}),
+      )
+          .timeout(const Duration(seconds: 120)); // ← was 30, now 120
 
-      // Check if server reported success
-      if (data['success'] != true) {
-        return null;
-      }
+      if (response.statusCode != 200) return null;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (data['success'] != true) return null;
 
       return OmrResult.fromJson(data);
     } catch (_) {

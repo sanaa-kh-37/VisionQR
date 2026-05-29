@@ -228,6 +228,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
 
     if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
       final answerKey = AnswerKey.fromPayload(rawValue);
+      _omrService.warmUp(); // wake Render server early — runs in background
 
       final scanResult = await _promptForOcrAndOmr();
 

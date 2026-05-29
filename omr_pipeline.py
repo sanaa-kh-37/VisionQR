@@ -1,279 +1,182 @@
 """
-omr_pipeline.py — FINAL CORRECT VERSION
-=========================================
+omr_pipeline.py — Gemini Flash Vision Edition
+===============================================
+Replaces fragile OpenCV bubble detection with Google Gemini Flash Vision.
+Gemini actually SEES the image and reads filled bubbles like a human.
+
 Part-I:  Q01–Q08  (keys: "Q01"…"Q08")
 Part-II: Q01–Q08  (keys: "Q01"…"Q08")
 
-KEY INSIGHT — relative scoring:
-  An empty printed circle has a dark BORDER that gives ~0.30 darkness.
-  A filled bubble is uniformly dark, giving ~0.70–0.90 darkness.
-  So we DON'T use an absolute threshold.
-  Instead: a bubble is filled if its score is ≥ RELATIVE_FACTOR × row average.
-  On a blank sheet, all 4 bubbles score similarly → ratio ≈ 1.0–1.2 → blank.
-  On a filled sheet, one bubble scores 2–3× the others → ratio > 1.5 → filled.
+SETUP:
+  Add to Render environment variables:
+      GEMINI_API_KEY=AIzaSy_your_key_here
+
+  app.py and all Flutter code stays EXACTLY THE SAME.
 """
 
+import os
+import base64
+import json
+import re
 import cv2
 import numpy as np
+import google.generativeai as genai
 
-# ========================= CONFIG =========================
-NUM_QUESTIONS  = 8
-NUM_CHOICES    = 4   # A B C D
+NUM_QUESTIONS = 8  # per part
 
-# A bubble is "filled" if its darkness score is this many times
-# greater than the row average. Tune between 1.4–2.0.
-# Lower → more sensitive (catches light pencil marks)
-# Higher → less false positives on blank sheets
-RELATIVE_FACTOR = 1.4
-
-# Skip leftmost fraction of each half (the Q01/Q02 label column)
-LABEL_SKIP_FRAC = 0.22
-# ==========================================================
+# ── Configure Gemini client ───────────────────────────────────────────────────
+_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+genai.configure(api_key=_API_KEY)
+_model = genai.GenerativeModel("gemini-1.5-flash")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC ENTRY POINT  (called by app.py — signature unchanged)
+# ═══════════════════════════════════════════════════════════════════════════════
 def process_omr_sheet(image):
+    """
+    image  : numpy BGR array (from cv2.imdecode in app.py)
+    returns: dict that app.py sends back to Flutter — shape unchanged
+    """
     h, w = image.shape[:2]
 
-    table = _crop_answer_table(image)
-    th, tw = table.shape[:2]
+    # Encode numpy image → JPEG bytes (Gemini needs real image bytes)
+    success, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not success:
+        raise RuntimeError("Could not encode image to JPEG")
 
-    gray    = cv2.cvtColor(table, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh  = cv2.adaptiveThreshold(
-        blurred, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        blockSize=15, C=4
-    )
+    jpeg_bytes = buf.tobytes()
 
-    mid = _find_split(thresh, tw)
+    # Ask Gemini to read the bubble sheet
+    part1, part2 = _ask_gemini(jpeg_bytes)
 
-    label_skip_l = int(mid * LABEL_SKIP_FRAC)
-    label_skip_r = int((tw - mid) * LABEL_SKIP_FRAC)
-
-    left_thresh  = thresh[:, label_skip_l : mid]
-    right_thresh = thresh[:, mid + label_skip_r :]
-
-    part1, b1, dbg1 = _read_part(left_thresh,  "Part-I",  start=1)
-    part2, b2, dbg2 = _read_part(right_thresh, "Part-II", start=1)
-
-    _save_debug(dbg1, dbg2, "debug_omr.jpg")
+    answered1 = sum(1 for v in part1.values() if v not in (None, "INVALID"))
+    answered2 = sum(1 for v in part2.values() if v not in (None, "INVALID"))
 
     return {
         "success": True,
-        "part1":   part1,
-        "part2":   part2,
+        "part1": part1,
+        "part2": part2,
         "debug_info": {
             "perspective_corrected": False,
-            "bubbles_found_part1":   b1,
-            "bubbles_found_part2":   b2,
+            "bubbles_found_part1":   answered1,
+            "bubbles_found_part2":   answered2,
             "image_size":            f"{w}x{h}",
-            "table_size":            f"{tw}x{th}",
-            "split_col":             mid,
+            "method":                "gemini-flash-vision",
         }
     }
 
 
-def _crop_answer_table(image):
-    h, w = image.shape[:2]
-    gray  = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 30, 100)
-    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=1)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GEMINI VISION CALL
+# ═══════════════════════════════════════════════════════════════════════════════
+def _ask_gemini(jpeg_bytes: bytes):
+    """
+    Send bubble sheet image to Gemini Flash and parse the JSON response.
+    Returns (part1_dict, part2_dict).
+    """
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    best = None
-    best_area = 0
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < w * h * 0.10 or area > w * h * 0.92:
-            continue
-        x, y, cw, ch = cv2.boundingRect(c)
-        if cw < w * 0.40 or cw < ch:
-            continue
-        if area > best_area:
-            best_area = area
-            best = (x, y, cw, ch)
+    prompt = """You are an OMR (Optical Mark Recognition) expert reading a student quiz answer sheet photo.
 
-    if best is None:
-        return image[int(h * 0.30):, :]
+The sheet has TWO sections side by side:
+  - Part-I  on the LEFT  — 8 questions (Q01 to Q08), each row has 4 bubbles labeled A B C D
+  - Part-II on the RIGHT — 8 questions (Q01 to Q08), each row has 4 bubbles labeled A B C D
 
-    x, y, cw, ch = best
-    pad = 4
-    return image[max(0,y-pad): min(h,y+ch+pad),
-                 max(0,x-pad): min(w,x+cw+pad)]
+YOUR TASK:
+  Look at each row carefully. Find which bubble is filled, shaded, or darkened by the student.
 
+RULES:
+  - Filled bubble = clearly darker/shaded compared to the empty ones (pencil or pen mark).
+  - If exactly ONE bubble is filled in a row → return that letter: "A", "B", "C", or "D"
+  - If NO bubble is filled in a row → return null
+  - If MORE THAN ONE bubble is filled → return "INVALID"
+  - Always include all 8 questions for both parts, even if answer is null.
 
-def _find_split(thresh, width):
-    col_sum = np.sum(thresh, axis=0).astype(np.float64)
-    lo, hi  = int(width * 0.30), int(width * 0.70)
-    return int(np.argmax(col_sum[lo:hi])) + lo
+Return ONLY valid JSON — absolutely no explanation, no markdown, no extra text.
+Use exactly this structure:
 
+{
+  "part1": {
+    "Q01": "A",
+    "Q02": "C",
+    "Q03": null,
+    "Q04": "B",
+    "Q05": "D",
+    "Q06": "A",
+    "Q07": "INVALID",
+    "Q08": "C"
+  },
+  "part2": {
+    "Q01": "B",
+    "Q02": "A",
+    "Q03": "D",
+    "Q04": null,
+    "Q05": "C",
+    "Q06": "B",
+    "Q07": "A",
+    "Q08": "D"
+  }
+}"""
 
-def _read_part(thresh_half, part_name, start=1):
-    choices = ['A', 'B', 'C', 'D']
-    answers = {f"Q{str(i).zfill(2)}": None for i in range(start, start + NUM_QUESTIONS)}
+    image_part = {
+        "mime_type": "image/jpeg",
+        "data": jpeg_bytes,
+    }
 
-    h, w   = thresh_half.shape
-    bubbles = _find_bubble_candidates(thresh_half)
-    grid    = _cluster_to_grid(bubbles, NUM_QUESTIONS, NUM_CHOICES, w, h)
+    response = _model.generate_content(
+        [prompt, image_part],
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.0,
+            max_output_tokens=512,
+        ),
+    )
 
-    debug = cv2.cvtColor(thresh_half, cv2.COLOR_GRAY2BGR)
-    filled_count = 0
-
-    for q_idx, row in enumerate(grid):
-        qkey = f"Q{str(start + q_idx).zfill(2)}"
-
-        used_fallback = not row or len(row) < NUM_CHOICES
-        if used_fallback:
-            row = _make_fallback_row(q_idx, w, h)
-
-        row_sorted = sorted(row, key=lambda b: b[0])[:NUM_CHOICES]
-
-        # Score each bubble
-        scores = [_interior_darkness(thresh_half, b[0], b[1], b[2], b[3])
-                  for b in row_sorted]
-
-        # Draw all bubbles
-        for b in row_sorted:
-            cv2.rectangle(debug, (b[0],b[1]), (b[0]+b[2], b[1]+b[3]), (0,180,0), 1)
-
-        # Relative decision
-        avg_score = sum(scores) / len(scores) if scores else 0
-        max_score = max(scores)
-        best_idx  = int(np.argmax(scores))
-
-        if not used_fallback and avg_score > 0 and (max_score / avg_score) >= RELATIVE_FACTOR:
-            answers[qkey] = choices[best_idx]
-            filled_count += 1
-            bx, by, bw, bh = row_sorted[best_idx]
-            cv2.rectangle(debug, (bx,by), (bx+bw, by+bh), (0,0,255), 2)
-            cv2.putText(debug, choices[best_idx], (bx+2, by+bh-2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
-
-    cv2.imwrite(f"debug_{part_name}.jpg", debug)
-    return answers, filled_count, debug
+    raw_text = response.text.strip()
+    return _parse_response(raw_text)
 
 
-def _find_bubble_candidates(thresh):
-    h, w = thresh.shape
-    min_w = max(8,  int(w * 0.03))
-    max_w = min(80, int(w * 0.25))
-    min_h = max(8,  int(h * 0.01))
-    max_h = min(80, int(h * 0.12))
+# ═══════════════════════════════════════════════════════════════════════════════
+#  RESPONSE PARSER
+# ═══════════════════════════════════════════════════════════════════════════════
+def _parse_response(raw: str):
+    """
+    Parse Gemini's JSON response into (part1_dict, part2_dict).
+    Handles markdown fences and minor formatting issues gracefully.
+    """
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    bubbles = []
-    for c in contours:
-        x, y, bw, bh = cv2.boundingRect(c)
-        if not (min_w <= bw <= max_w and min_h <= bh <= max_h):
-            continue
-        ar = bw / float(bh)
-        if ar < 0.45 or ar > 2.2:
-            continue
-        if cv2.contourArea(c) < min_w * min_h * 0.25:
-            continue
-        bubbles.append((x, y, bw, bh))
-
-    return _deduplicate(bubbles)
-
-
-def _deduplicate(bubbles, overlap=0.35):
-    if not bubbles:
-        return bubbles
-    bubbles = sorted(bubbles, key=lambda b: -(b[2]*b[3]))
-    kept = []
-    for b in bubbles:
-        bx, by, bw, bh = b
-        skip = False
-        for k in kept:
-            kx, ky, kw, kh = k
-            ix = max(0, min(bx+bw, kx+kw) - max(bx, kx))
-            iy = max(0, min(by+bh, ky+kh) - max(by, ky))
-            inter = ix * iy
-            union = bw*bh + kw*kh - inter
-            if union > 0 and inter/union > overlap:
-                skip = True
-                break
-        if not skip:
-            kept.append(b)
-    return kept
-
-
-def _cluster_to_grid(bubbles, num_rows, num_cols, img_w, img_h):
-    if not bubbles:
-        return [[] for _ in range(num_rows)]
-
-    bubbles_cy = sorted(bubbles, key=lambda b: b[1] + b[3]//2)
-    row_groups  = []
-    current = [bubbles_cy[0]]
-    for b in bubbles_cy[1:]:
-        cy_prev = current[-1][1] + current[-1][3]//2
-        cy_cur  = b[1] + b[3]//2
-        if abs(cy_cur - cy_prev) < 18:
-            current.append(b)
-        else:
-            row_groups.append(current)
-            current = [b]
-    row_groups.append(current)
-
-    row_groups = [r for r in row_groups if len(r) >= 2]
-    row_groups.sort(key=lambda r: -len(r))
-    chosen = row_groups[:num_rows]
-    chosen.sort(key=lambda r: sum(b[1]+b[3]//2 for b in r)/len(r))
-
-    grid = []
-    for row in chosen:
-        row_x = sorted(row, key=lambda b: b[0])
-        if len(row_x) > num_cols:
-            row_x = _pick_best_n_cols(row_x, num_cols)
-        grid.append(row_x[:num_cols])
-
-    while len(grid) < num_rows:
-        grid.append([])
-    return grid
-
-
-def _pick_best_n_cols(bubbles_in_row, n):
-    from itertools import combinations
-    if len(bubbles_in_row) <= n:
-        return bubbles_in_row
-    xs = [b[0] + b[2]//2 for b in bubbles_in_row]
-    best_combo, best_var = None, float('inf')
-    for combo in combinations(range(len(bubbles_in_row)), n):
-        sel = sorted([xs[i] for i in combo])
-        gaps = [sel[i+1]-sel[i] for i in range(len(sel)-1)]
-        v = float(np.var(gaps))
-        if v < best_var:
-            best_var = v
-            best_combo = combo
-    return [bubbles_in_row[i] for i in sorted(best_combo)]
-
-
-def _make_fallback_row(q_idx, img_w, img_h):
-    row_h = img_h / NUM_QUESTIONS
-    col_w = img_w / NUM_CHOICES
-    return [(int(c*col_w + col_w*0.15), int(q_idx*row_h + row_h*0.15),
-             int(col_w*0.70), int(row_h*0.70)) for c in range(NUM_CHOICES)]
-
-
-def _interior_darkness(thresh, x, y, w, h):
-    sx = max(1, int(w * 0.20))
-    sy = max(1, int(h * 0.20))
-    x1, y1 = max(0, x+sx), max(0, y+sy)
-    x2, y2 = min(thresh.shape[1], x+w-sx), min(thresh.shape[0], y+h-sy)
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    roi = thresh[y1:y2, x1:x2]
-    return int(cv2.countNonZero(roi)) / max(roi.size, 1)
-
-
-def _save_debug(dbg1, dbg2, filename):
     try:
-        h1, w1 = dbg1.shape[:2]
-        h2, w2 = dbg2.shape[:2]
-        th = max(h1, h2)
-        d1 = cv2.resize(dbg1,(w1,th)) if h1!=th else dbg1
-        d2 = cv2.resize(dbg2,(w2,th)) if h2!=th else dbg2
-        cv2.imwrite(filename, np.hstack([d1,d2]))
-    except Exception:
-        pass
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group())
+            except Exception:
+                return _empty_answers(), _empty_answers()
+        else:
+            return _empty_answers(), _empty_answers()
+
+    part1 = _normalise_part(data.get("part1", {}))
+    part2 = _normalise_part(data.get("part2", {}))
+
+    return part1, part2
+
+
+def _normalise_part(raw: dict) -> dict:
+    valid = {"A", "B", "C", "D", "INVALID"}
+    result = {}
+    for i in range(1, NUM_QUESTIONS + 1):
+        key = f"Q{str(i).zfill(2)}"
+        val = raw.get(key)
+        if val is None:
+            result[key] = None
+        elif str(val).upper() in valid:
+            result[key] = str(val).upper()
+        else:
+            result[key] = None
+    return result
+
+
+def _empty_answers() -> dict:
+    return {f"Q{str(i).zfill(2)}": None for i in range(1, NUM_QUESTIONS + 1)}

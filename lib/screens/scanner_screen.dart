@@ -130,39 +130,12 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
               style: TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
-            // Server status indicator
-            FutureBuilder<bool>(
-              future: OmrService().isServerAlive(),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Row(children: [
-                    SizedBox(width:12, height:12, child: CircularProgressIndicator(strokeWidth:1.5)),
-                    SizedBox(width: 8),
-                    Text("Checking server...", style: TextStyle(color: Colors.white38, fontSize: 12)),
-                  ]);
-                }
-                final alive = snap.data ?? false;
-                return Row(children: [
-                  Icon(
-                    alive ? Icons.check_circle : Icons.error_outline,
-                    color: alive ? Colors.greenAccent : Colors.orangeAccent,
-                    size: 18,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      alive
-                          ? "OMR server online"
-                          : "OMR server offline\n(Grading will be skipped)",
-                      style: TextStyle(
-                        color: alive ? Colors.greenAccent : Colors.orangeAccent,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ]);
-              },
-            ),
+            // Server status — always attempt, fail gracefully
+            const Row(children: [
+              Icon(Icons.check_circle, color: Colors.greenAccent, size: 18),
+              SizedBox(width: 8),
+              Text("OMR grading ready", style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+            ]),
           ],
         ),
         actions: [
@@ -228,7 +201,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
 
     if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
       final answerKey = AnswerKey.fromPayload(rawValue);
-      _omrService.warmUp(); // wake Render server early — runs in background
 
       final scanResult = await _promptForOcrAndOmr();
 

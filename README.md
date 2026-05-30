@@ -187,34 +187,34 @@ flutter run -d windows
 ## App Interfaces
 
 ### Splash Screen
-<img src="Images/111.jpeg" width="220"/>
+<img src="Images/333.jpeg" width="220"/>
 
 ### Dashboard
 <img src="Images/222.jpeg" width="220"/>
 
+### Navigation Interface
+<img src="Images/111.jpeg" width="300"/>
+
 ### Create QR Screen
-<img src="Images/333.jpeg" width="300"/>
+<img src="Images/888.jpeg" width="300"/>
 
 ### Get Media Screen
-<img src="Images/444.jpeg" width="300"/>
+<img src="Images/1010.jpeg" width="300"/>
 
 ### Get Media Result
-<img src="Images/555.jpeg" width="300"/>
+<img src="Images/999.jpeg" width="300"/>
 
 ### Batch Grading
 <img src="Images/666.jpeg" width="300"/>
 
-### OMR Detection
-<img src="Images/777.jpeg" width="300"/>
+### OMR Detection 
+<img src="Images/555.jpeg" width="300"/>
 
 ### OMR Detection Result
-<img src="Images/888.jpeg" width="300"/>
+<img src="Images/444.jpeg" width="300"/>
 
 ### History Screen
-<img src="Images/999.jpeg" width="300"/>
-
-### Navigation Interface
-<img src="Images/1010.jpeg" width="300"/>
+<img src="Images/777.jpeg" width="300"/>
 
 
 

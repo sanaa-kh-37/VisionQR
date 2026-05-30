@@ -1,6 +1,6 @@
 # VisionQR – AI-Powered QR & OMR Evaluation System
 
-![Dashboard](Images/Dashboard.jpeg)
+![Dashboard](Images/222.jpeg)
 
 ## 📌 Project Overview
 
@@ -186,43 +186,43 @@ flutter run -d windows
 
 ### Splash Screen
 
-![Splash Screen](Images/splashscreen.jpeg)
+![Splash Screen](Images/333.jpeg)
 
 ### Dashboard
 
-![Dashboard](Images/Dashboard.jpeg)
+![Dashboard](Images/222.jpeg)
 
 ### Navigation Interface
 
-![Navigation Interface](Images/topsidebar3.jpeg)
+![Navigation Interface](Images/111.jpeg)
 
 ### Create QR Screen
 
-![Create QR](Images/createQR.jpeg)
+![Create QR](Images/888.jpeg)
 
 ### Get Media Screen
 
-![Get Media](Images/getmedia.jpeg)
+![Get Media](Images/1010.jpeg)
 
 ### Get Media Result
 
-![Get Media Result](Images/getmedia2.jpeg)
+![Get Media Result](Images/999.jpeg)
 
 ### Batch Grading
 
-![Batch Grading](Images/batchgrading.jpeg)
+![Batch Grading](Images/666.jpeg)
 
 ### OMR Detection
 
-![OMR Detection](Images/omr.jpeg)
+![OMR Detection](Images/555.jpeg)
 
 ### OMR Detection Result
 
-![OMR Detection Result](Images/omr2.jpeg)
+![OMR Detection Result](Images/444.jpeg)
 
 ### History Screen
 
-![History](Images/history.jpeg)
+![History](Images/777.jpeg)
 
 
 

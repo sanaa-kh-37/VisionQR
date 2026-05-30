@@ -4,6 +4,7 @@ import 'screens/dashboard_screen.dart';
 import 'screens/scanner_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/generator_screen.dart';
+import 'screens/bubble_sheet_demo.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 
@@ -87,7 +88,7 @@ class _SplashScreenState extends State<SplashScreen>
                     height: 130,
                     child: CircularProgressIndicator(
                       valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.blueAccent.withOpacity(0.4)),
+                          Colors.blueAccent.withValues(alpha: 0.4)),
                       strokeWidth: 2,
                     ),
                   ),
@@ -95,10 +96,10 @@ class _SplashScreenState extends State<SplashScreen>
                     width: 90,
                     height: 90,
                     decoration: BoxDecoration(
-                      color: Colors.blueAccent.withOpacity(0.1),
+                      color: Colors.blueAccent.withValues(alpha: 0.1),
                       shape: BoxShape.circle,
                       border: Border.all(
-                          color: Colors.blueAccent.withOpacity(0.2),
+                          color: Colors.blueAccent.withValues(alpha: 0.2),
                           width: 1.5),
                     ),
                     child: const Icon(
@@ -179,6 +180,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       HistoryScreen(onBack: () => setState(() => _currentIndex = 0)),
       GeneratorScreen(onBack: () => setState(() => _currentIndex = 0)),
+      BubbleSheetDemo(onBack: () => setState(() => _currentIndex = 0)), // index 4 — OMR read_bubble_sheet demo
     ];
 
     return PopScope(
@@ -205,10 +207,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.blueAccent.withOpacity(0.15),
+                          color: Colors.blueAccent.withValues(alpha: 0.15),
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: Colors.blueAccent.withOpacity(0.3)),
+                              color: Colors.blueAccent.withValues(alpha: 0.3)),
                         ),
                         child: const Icon(Icons.qr_code_2_rounded,
                             color: Colors.blueAccent, size: 28),
@@ -256,6 +258,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   index: 3,
                   currentIndex: _currentIndex,
                   onTap: () => _navigate(3),
+                ),
+                _drawerItem(
+                  icon: Icons.bubble_chart_rounded,
+                  label: "OMR Demo",
+                  index: 4,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(4),
                 ),
 
                 const Spacer(),
@@ -308,7 +317,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         selected: isSelected,
-        selectedTileColor: Colors.blueAccent.withOpacity(0.1),
+        selectedTileColor: Colors.blueAccent.withValues(alpha: 0.1),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
         ),

@@ -1,7 +1,0 @@
-# requirements.txt
-# Install with:   pip install -r requirements.txt
-
-flask==3.0.3                      # web server framework
-opencv-python==4.9.0.80           # image encoding/decoding
-numpy==1.26.4                     # array math
-google-genai>=0.8.0

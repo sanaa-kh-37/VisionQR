@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -8,8 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/scanned_code.dart';
 import '../models/answer_key.dart';
 import '../services/history_database.dart';
-import '../services/ocr_service.dart';
-import '../services/omr_service.dart';
+
+// OCR is now handled by Gemini inside OmrService — ocr_service.dart removed.
+import '../services/omr_service.dart' as omr_service;
 
 class ScannerScreen extends StatefulWidget {
   final bool isScanning;
@@ -22,9 +24,8 @@ class ScannerScreen extends StatefulWidget {
 
 class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderStateMixin {
   final MobileScannerController _controller = MobileScannerController(autoStart: false);
-  final OcrService _ocrService = OcrService();
   final ImagePicker _picker = ImagePicker();
-  final OmrService _omrService = OmrService();
+  final omr_service.OmrService _omrService = omr_service.OmrService();
 
   bool _isFlashOn = false;
   bool _isARActive = true;
@@ -61,7 +62,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   void dispose() {
     _controller.dispose();
     _arAnimationController.dispose();
-    _ocrService.dispose();
     super.dispose();
   }
 
@@ -105,123 +105,181 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
-  Future<({StudentInfo? student, OmrResult? omr})> _promptForOcrAndOmr() async {
+  // ====================== OMR + OCR FLOW ======================
+  // Step 1: ask user for photo source (Camera / Gallery)
+  // Step 2: send image to Gemini — reads name, reg no AND bubbles in one call
+  // Step 3: return real results to _processScannedPayload
+  // Step 4: THEN open the bottom sheet with all data filled in
+  Future<omr_service.OmrResult?> _promptForOcrAndOmr() async {
     _controller.stop();
 
-    StudentInfo? studentInfo;
-    OmrResult?   omrResult;
+    // Use Completer so button callbacks can pass results back out of the dialog
+    final completer = Completer<omr_service.OmrResult?>();
 
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: const Color(0xFF1E293B),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          "Quiz Sheet Detected!",
-          style: GoogleFonts.spaceGrotesk(
-              color: Colors.white, fontWeight: FontWeight.bold),
+        title: const Text(
+          "Upload OMR Sheet",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
-        content: Column(
+        content: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              "Capture the OMR sheet to auto-grade bubble answers and read student info.",
+            Text(
+              "Please upload the student quiz sheet so Gemini can read the name, registration number and bubble answers.",
               style: TextStyle(color: Colors.white70),
             ),
-            const SizedBox(height: 12),
-            // Server status — always attempt, fail gracefully
-            const Row(children: [
+            SizedBox(height: 16),
+            Row(children: [
               Icon(Icons.check_circle, color: Colors.greenAccent, size: 18),
               SizedBox(width: 8),
-              Text("OMR grading ready", style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+              Text("Gemini Vision Ready", style: TextStyle(color: Colors.greenAccent, fontSize: 11)),
             ]),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              if (!completer.isCompleted) completer.complete(null);
+              Navigator.pop(dialogContext);
+            },
             child: const Text("Skip", style: TextStyle(color: Colors.white38)),
           ),
-          ElevatedButton(
+          ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            icon: const Icon(Icons.camera_alt, size: 18),
+            label: const Text("Camera"),
             onPressed: () async {
-              final XFile? photo = await _picker.pickImage(
-                source: ImageSource.camera,
-                imageQuality: 90,
-              );
-              if (photo == null) return;
-
-              if (context.mounted) {
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (_) => const Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 16),
-                        Text("Scanning bubbles...",
-                            style: TextStyle(color: Colors.white70)),
-                      ],
-                    ),
-                  ),
-                );
-              }
-
-              final imageFile = File(photo.path);
-
-              final results = await Future.wait([
-                _ocrService.extractStudentInfo(imageFile),
-                _omrService.scanSheet(imageFile),
-              ]);
-
-              studentInfo = results[0] as StudentInfo?;
-              omrResult   = results[1] as OmrResult?;
-
-              if (context.mounted) {
-                Navigator.pop(context); // close loading
-                Navigator.pop(context); // close dialog
-              }
+              Navigator.pop(dialogContext); // close dialog first
+              final result = await _captureAndAnalyze(ImageSource.camera);
+              if (!completer.isCompleted) completer.complete(result);
             },
-            child: const Text("Capture Sheet",
-                style: TextStyle(color: Colors.white)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent),
+            icon: const Icon(Icons.photo_library, size: 18),
+            label: const Text("Gallery"),
+            onPressed: () async {
+              Navigator.pop(dialogContext); // close dialog first
+              final result = await _captureAndAnalyze(ImageSource.gallery);
+              if (!completer.isCompleted) completer.complete(result);
+            },
           ),
         ],
       ),
     );
 
+    // Safety net: if dialog was dismissed without tapping any button
+    if (!completer.isCompleted) completer.complete(null);
+
     if (widget.isScanning) _controller.start();
-    return (student: studentInfo, omr: omrResult);
+    return completer.future;
   }
 
+  // Picks image → shows spinner → calls Gemini (OCR + OMR in one shot) → returns result
+  Future<omr_service.OmrResult?> _captureAndAnalyze(ImageSource source) async {
+    // 1. Pick image
+    final XFile? photo = await _picker.pickImage(source: source, imageQuality: 90);
+    if (photo == null) return null;
+
+    // 2. Show loading spinner
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: Colors.blueAccent),
+                SizedBox(height: 20),
+                Text(
+                  "Gemini is reading the sheet...",
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  "Detecting name, reg no & bubbles",
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 3. ONE Gemini call reads name, reg no AND bubbles together
+    final imageFile = File(photo.path);
+    omr_service.OmrResult? omrResult;
+
+    try {
+      omrResult = await _omrService.scanSheet(imageFile);
+      if (omrResult != null) {
+        print("✅ Gemini → name=${omrResult.studentName}, "
+            "reg=${omrResult.studentRegNo}, "
+            "p1=${omrResult.part1.length}, p2=${omrResult.part2.length}");
+      }
+    } catch (e) {
+      print("❌ Gemini scan error: $e");
+    }
+
+    // 4. Close spinner
+    if (mounted) Navigator.pop(context);
+
+    return omrResult;
+  }
+
+  // Unified Scanner Payload Implementation
   void _processScannedPayload(String rawValue) async {
     _lastScannedValue = rawValue;
 
     if (rawValue.contains("Part-I:") && rawValue.contains("Part-II:")) {
       final answerKey = AnswerKey.fromPayload(rawValue);
 
-      final scanResult = await _promptForOcrAndOmr();
+      final omrResult = await _promptForOcrAndOmr();
+
+      // Resolve student name and reg no from the Gemini result
+      final String resolvedName = (omrResult != null &&
+          omrResult.studentName.isNotEmpty &&
+          omrResult.studentName != 'Not Detected')
+          ? omrResult.studentName
+          : 'Not Detected';
+
+      final String resolvedRegNo = (omrResult != null &&
+          omrResult.studentRegNo.isNotEmpty &&
+          omrResult.studentRegNo != 'Not Detected')
+          ? omrResult.studentRegNo
+          : 'Not Detected';
 
       final newItem = ScannedCode(
         id          : DateTime.now().millisecondsSinceEpoch.toString(),
         type        : 'answer_key',
         value       : rawValue,
         title       : answerKey.quizTitle,
-        studentName : scanResult.student?.name,
-        studentRegNo: scanResult.student?.regNo,
+        studentName : resolvedName,
+        studentRegNo: resolvedRegNo,
         dateTime    : _formatNow(),
-        omrPart1    : scanResult.omr?.part1,
-        omrPart2    : scanResult.omr?.part2,
+        omrPart1    : omrResult?.part1,
+        omrPart2    : omrResult?.part2,
       );
 
       await HistoryDatabase.saveItem(newItem);
-      _showAnswerKeyBottomSheet(answerKey, newItem, scanResult.omr);
+      _showAnswerKeyBottomSheet(answerKey, newItem, omrResult);
       return;
     }
 
-    // Normal processing (unchanged)
+    // Standard QR code payload fallback
     String type = 'text';
     String title = 'Scanned Text';
 
@@ -245,8 +303,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
       type: type,
       value: rawValue,
       title: title,
-      dateTime: "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} "
-          "${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}",
+      dateTime: _formatNow(),
     );
 
     await HistoryDatabase.saveItem(newItem);
@@ -271,18 +328,9 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     }
   }
 
-  // ====================== UPDATED OMR GRADE SECTION ======================
-  // =====================================================================
-// REPLACE _buildOmrGradeSection in scanner_screen.dart with this version
-// =====================================================================
-//
-// FIXES:
-//   1. Part-I graded against part1 OMR, Part-II against part2 OMR separately
-//   2. Key normalisation: "Q1" == "Q01" (answer key may use Q1, OMR uses Q01)
-//   3. Clear two-section display: Part-I results, then Part-II results
-
-  Widget _buildOmrGradeSection(AnswerKey key, OmrResult? omr) {
-    if (omr == null) {
+  // ====================== OMR GRADE UI SECTION ======================
+  Widget _buildOmrGradeSection(AnswerKey key, omr_service.OmrResult? omrResult) {
+    if (omrResult == null) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 16),
         child: Text(
@@ -293,23 +341,20 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
       );
     }
 
-    // Normalise a key like "Q1" or "Q01" → "Q01"
+    // Normalize keys like "Q1" or "Q01" -> "Q01"
     String _norm(String k) {
       final digits = k.replaceAll(RegExp(r'[^0-9]'), '');
       return 'Q${digits.padLeft(2, '0')}';
     }
 
-    // Build normalised maps
-    final keyPart1 = { for (var e in key.part1.entries) _norm(e.key): e.value };
-    final keyPart2 = { for (var e in key.part2.entries) _norm(e.key): e.value };
-    final omrPart1 = { for (var e in omr.part1.entries) _norm(e.key): e.value };
-    final omrPart2 = { for (var e in omr.part2.entries) _norm(e.key): e.value };
+    final keyPart1 = Map<String, String>.from({ for (var e in key.part1.entries) _norm(e.key): e.value });
+    final keyPart2 = Map<String, String>.from({ for (var e in key.part2.entries) _norm(e.key): e.value });
+    final omrPart1 = Map<String, String?>.from({ for (var e in omrResult.part1.entries) _norm(e.key): e.value });
+    final omrPart2 = Map<String, String?>.from({ for (var e in omrResult.part2.entries) _norm(e.key): e.value });
 
     int correct = 0, wrong = 0, blank = 0;
 
-    // Grade one part, returns list of row widgets
-    List<Widget> _gradeRows(
-        Map<String, String> keyMap, Map<String, String?> omrMap) {
+    List<Widget> _gradeRows(Map<String, String> keyMap, Map<String, String?> omrMap) {
       return keyMap.entries.map((entry) {
         final qKey       = entry.key;
         final correctAns = entry.value;
@@ -319,7 +364,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         IconData icon;
         String   display;
 
-        if (studentAns == null) {
+        if (studentAns == null || studentAns.trim().isEmpty) {
           blank++;
           color   = Colors.white24;
           icon    = Icons.remove;
@@ -374,7 +419,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         const Divider(color: Colors.white12),
         const SizedBox(height: 12),
 
-        // Header
         Row(children: [
           const Icon(Icons.auto_awesome, color: Colors.greenAccent, size: 16),
           const SizedBox(width: 8),
@@ -388,7 +432,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         ]),
         const SizedBox(height: 16),
 
-        // Part-I
         Text("Part - I",
             style: GoogleFonts.spaceGrotesk(
                 fontSize: 13,
@@ -398,7 +441,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         ...part1Rows,
         const SizedBox(height: 16),
 
-        // Part-II
         Text("Part - II",
             style: GoogleFonts.spaceGrotesk(
                 fontSize: 13,
@@ -408,7 +450,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         ...part2Rows,
         const SizedBox(height: 16),
 
-        // Score summary chips
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
@@ -446,7 +487,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     );
   }
 
-  // ... Rest of your file remains the same (build, _showAnswerKeyBottomSheet, etc.)
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -593,8 +633,8 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     );
   }
 
-  // ====================== ANSWER KEY SHEET ======================
-  void _showAnswerKeyBottomSheet(AnswerKey key, ScannedCode code, [OmrResult? omr]) {
+  // ====================== ANSWER KEY BOTTOM SHEET ======================
+  void _showAnswerKeyBottomSheet(AnswerKey key, ScannedCode code, [omr_service.OmrResult? omrResult]) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -615,33 +655,32 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
               Center(child: Container(width: 50, height: 5, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(10)))),
               const SizedBox(height: 20),
 
-              if (code.studentName != null || code.studentRegNo != null)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 20),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.blueAccent.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.person_pin_rounded, color: Colors.blueAccent, size: 40),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(code.studentName ?? "Name Not Found",
-                                style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                            Text("Registration: ${code.studentRegNo ?? "N/A"}",
-                                style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+              Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
                 ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.person_pin_rounded, color: Colors.blueAccent, size: 40),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(code.studentName ?? "Name Not Found",
+                              style: GoogleFonts.spaceGrotesk(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                          Text("Registration: ${code.studentRegNo ?? "N/A"}",
+                              style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
               Text(key.quizTitle, style: GoogleFonts.spaceGrotesk(fontSize: 20, fontWeight: FontWeight.bold)),
               if (key.setInfo.isNotEmpty) Text("Set ${key.setInfo}", style: const TextStyle(color: Colors.cyanAccent, fontSize: 16)),
@@ -653,7 +692,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
                     _buildPart("Part - I", key.part1),
                     const SizedBox(height: 24),
                     _buildPart("Part - II", key.part2),
-                    if (omr != null || true) _buildOmrGradeSection(key, omr),  // Always call (handles null)
+                    _buildOmrGradeSection(key, omrResult),
                   ],
                 ),
               ),
@@ -688,7 +727,6 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
     );
   }
 
-  // ... (rest of _showResultBottomSheet and _buildTypeSpecificResult remains unchanged)
   void _showResultBottomSheet(ScannedCode code) {
     showModalBottomSheet(
       context: context,
@@ -735,7 +773,7 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14), backgroundColor: Colors.white12, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-                child: const Text("Dismiss Scan Sheet", style: TextStyle(color: Colors.white70)),
+                child: const Text("Dismiss Dismiss Scan Sheet", style: TextStyle(color: Colors.white70)),
               ),
             ],
           ),

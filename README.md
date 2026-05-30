@@ -57,7 +57,7 @@ The goal of this project is to reduce manual grading effort, improve accuracy, a
 
 ---
 
-## ⚠️ Important Note
+## For Best User Experience
 
 The accuracy of OMR detection depends heavily on image quality.
 
@@ -192,6 +192,10 @@ flutter run -d windows
 
 ![Dashboard](Images/Dashboard.jpeg)
 
+### Navigation Interface
+
+![Navigation Interface](Images/topsidebar3.jpeg)
+
 ### Create QR Screen
 
 ![Create QR](Images/createQR.jpeg)
@@ -220,9 +224,7 @@ flutter run -d windows
 
 ![History](Images/history.jpeg)
 
-### Navigation Interface
 
-![Navigation Interface](Images/topsidebar3.jpeg)
 
 ---
 
@@ -272,14 +274,8 @@ VisionQR
 
 ## 👥 Team Contributions
 
-| Member        | Contribution                                   |
-| ------------- | ---------------------------------------------- |
-| Sanaa Kh.     | Project Development, UI Design, QR Integration |
-| Team Member 2 | OMR Detection                                  |
-| Team Member 3 | Evaluation Logic                               |
-| Team Member 4 | Testing & Documentation                        |
-
-*(Update names and responsibilities according to your actual team members.)*
+Sana Ishtiaq
+Habiba Gul
 
 ---
 
@@ -294,12 +290,4 @@ VisionQR
 
 ---
 
-## 🎓 Academic Purpose
 
-This project was developed as part of an academic coursework assignment to demonstrate the application of Computer Vision, QR Technology, and OMR-based automated evaluation systems.
-
----
-
-## 📄 License
-
-This repository is intended for educational and academic use.

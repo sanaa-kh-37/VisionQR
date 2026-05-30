@@ -7,6 +7,8 @@ class DashboardScreen extends StatelessWidget {
   final VoidCallback onNavigateToHistory;
   final VoidCallback onNavigateToCreate;
   final VoidCallback onPickFromGallery;
+  final VoidCallback onNavigateToOmrDemo; // index 4
+  final VoidCallback onNavigateToBatch;   // index 5
 
   const DashboardScreen({
     super.key,
@@ -15,6 +17,8 @@ class DashboardScreen extends StatelessWidget {
     required this.onNavigateToHistory,
     required this.onNavigateToCreate,
     required this.onPickFromGallery,
+    required this.onNavigateToOmrDemo,
+    required this.onNavigateToBatch,
   });
 
   @override
@@ -105,7 +109,7 @@ class DashboardScreen extends StatelessWidget {
             ),
             const SizedBox(height: 28),
 
-            // 4-card grid
+            // 6-card grid
             GridView.count(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -141,6 +145,20 @@ class DashboardScreen extends StatelessWidget {
                   title: "Scan Log Hub",
                   subtitle: "Query logs and archive links",
                   onTap: onNavigateToHistory,
+                ),
+                _buildDashCard(
+                  icon: Icons.bubble_chart_rounded,
+                  iconColor: Colors.tealAccent,
+                  title: "OMR Demo",
+                  subtitle: "Read a single bubble sheet and inspect answers",
+                  onTap: onNavigateToOmrDemo,
+                ),
+                _buildDashCard(
+                  icon: Icons.grading_rounded,
+                  iconColor: Colors.orangeAccent,
+                  title: "Batch Grading",
+                  subtitle: "Grade many sheets and export a CSV report",
+                  onTap: onNavigateToBatch,
                 ),
               ],
             ),

@@ -6,7 +6,7 @@ import 'screens/history_screen.dart';
 import 'screens/generator_screen.dart';
 import 'screens/bubble_sheet_demo.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-
+import 'screens/batch_screen.dart';
 
 
 Future<void> main() async {
@@ -172,6 +172,8 @@ class _HomeScreenState extends State<HomeScreen> {
             _scannerKey.currentState?.pickAndDecodeCode();
           });
         },
+        onNavigateToOmrDemo: () => setState(() => _currentIndex = 4),
+        onNavigateToBatch: () => setState(() => _currentIndex = 5),
       ),
       ScannerScreen(
         key: _scannerKey,
@@ -181,6 +183,7 @@ class _HomeScreenState extends State<HomeScreen> {
       HistoryScreen(onBack: () => setState(() => _currentIndex = 0)),
       GeneratorScreen(onBack: () => setState(() => _currentIndex = 0)),
       BubbleSheetDemo(onBack: () => setState(() => _currentIndex = 0)), // index 4 — OMR read_bubble_sheet demo
+      BatchScreen(onBack: () => setState(() => _currentIndex = 0)), // index 5 — batch grading + CSV
     ];
 
     return PopScope(
@@ -265,6 +268,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   index: 4,
                   currentIndex: _currentIndex,
                   onTap: () => _navigate(4),
+                ),
+                _drawerItem(
+                  icon: Icons.grading_rounded,
+                  label: "Batch Grading",
+                  index: 5,
+                  currentIndex: _currentIndex,
+                  onTap: () => _navigate(5),
                 ),
 
                 const Spacer(),

@@ -9,6 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/scanned_code.dart';
 import '../models/answer_key.dart';
 import '../services/history_database.dart';
+import '../models/student_answers.dart';
+import '../services/quiz_grader.dart';
+import '../widgets/grade_report_view.dart';
 
 // OCR is now handled by Gemini inside OmrService — ocr_service.dart removed.
 import '../services/omr_service.dart' as omr_service;
@@ -113,10 +116,10 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   Future<omr_service.OmrResult?> _promptForOcrAndOmr() async {
     _controller.stop();
 
-    // Use Completer so button callbacks can pass results back out of the dialog
-    final completer = Completer<omr_service.OmrResult?>();
-
-    await showDialog(
+    // The dialog only PICKS a source (or null for Skip). The actual capture +
+    // Gemini call runs AFTER the dialog closes, so there is no race between the
+    // dialog closing and the async scan finishing.
+    final ImageSource? source = await showDialog<ImageSource?>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
@@ -143,41 +146,33 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              if (!completer.isCompleted) completer.complete(null);
-              Navigator.pop(dialogContext);
-            },
+            onPressed: () => Navigator.pop(dialogContext, null), // Skip
             child: const Text("Skip", style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
             icon: const Icon(Icons.camera_alt, size: 18),
             label: const Text("Camera"),
-            onPressed: () async {
-              Navigator.pop(dialogContext); // close dialog first
-              final result = await _captureAndAnalyze(ImageSource.camera);
-              if (!completer.isCompleted) completer.complete(result);
-            },
+            onPressed: () => Navigator.pop(dialogContext, ImageSource.camera),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent),
             icon: const Icon(Icons.photo_library, size: 18),
             label: const Text("Gallery"),
-            onPressed: () async {
-              Navigator.pop(dialogContext); // close dialog first
-              final result = await _captureAndAnalyze(ImageSource.gallery);
-              if (!completer.isCompleted) completer.complete(result);
-            },
+            onPressed: () => Navigator.pop(dialogContext, ImageSource.gallery),
           ),
         ],
       ),
     );
 
-    // Safety net: if dialog was dismissed without tapping any button
-    if (!completer.isCompleted) completer.complete(null);
+    // Run the real capture + Gemini scan now that the chooser is gone.
+    omr_service.OmrResult? result;
+    if (source != null) {
+      result = await _captureAndAnalyze(source);
+    }
 
     if (widget.isScanning) _controller.start();
-    return completer.future;
+    return result;
   }
 
   // Picks image → shows spinner → calls Gemini (OCR + OMR in one shot) → returns result
@@ -329,6 +324,8 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
   }
 
   // ====================== OMR GRADE UI SECTION ======================
+  // Uses the Task-4 deliverable: grade_quiz(...) -> GradeReport, rendered
+  // by the shared GradeReportView widget (tick / cross / dash + score).
   Widget _buildOmrGradeSection(AnswerKey key, omr_service.OmrResult? omrResult) {
     if (omrResult == null) {
       return const Padding(
@@ -341,150 +338,11 @@ class ScannerScreenState extends State<ScannerScreen> with SingleTickerProviderS
       );
     }
 
-    // Normalize keys like "Q1" or "Q01" -> "Q01"
-    String _norm(String k) {
-      final digits = k.replaceAll(RegExp(r'[^0-9]'), '');
-      return 'Q${digits.padLeft(2, '0')}';
-    }
-
-    final keyPart1 = Map<String, String>.from({ for (var e in key.part1.entries) _norm(e.key): e.value });
-    final keyPart2 = Map<String, String>.from({ for (var e in key.part2.entries) _norm(e.key): e.value });
-    final omrPart1 = Map<String, String?>.from({ for (var e in omrResult.part1.entries) _norm(e.key): e.value });
-    final omrPart2 = Map<String, String?>.from({ for (var e in omrResult.part2.entries) _norm(e.key): e.value });
-
-    int correct = 0, wrong = 0, blank = 0;
-
-    List<Widget> _gradeRows(Map<String, String> keyMap, Map<String, String?> omrMap) {
-      return keyMap.entries.map((entry) {
-        final qKey       = entry.key;
-        final correctAns = entry.value;
-        final studentAns = omrMap[qKey];
-
-        Color    color;
-        IconData icon;
-        String   display;
-
-        if (studentAns == null || studentAns.trim().isEmpty) {
-          blank++;
-          color   = Colors.white24;
-          icon    = Icons.remove;
-          display = "—";
-        } else if (studentAns == correctAns) {
-          correct++;
-          color   = Colors.greenAccent;
-          icon    = Icons.check_circle_rounded;
-          display = studentAns;
-        } else {
-          wrong++;
-          color   = Colors.redAccent;
-          icon    = Icons.cancel_rounded;
-          display = studentAns;
-        }
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.07),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: color.withOpacity(0.2)),
-          ),
-          child: Row(children: [
-            SizedBox(
-              width: 40,
-              child: Text(qKey,
-                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
-            ),
-            Text("Key: $correctAns  ",
-                style: const TextStyle(color: Colors.white54, fontSize: 12)),
-            Text("Got: $display",
-                style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12)),
-            const Spacer(),
-            Icon(icon, color: color, size: 16),
-          ]),
-        );
-      }).toList();
-    }
-
-    final part1Rows = _gradeRows(keyPart1, omrPart1);
-    final part2Rows = _gradeRows(keyPart2, omrPart2);
-    final totalQ    = keyPart1.length + keyPart2.length;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Divider(color: Colors.white12),
-        const SizedBox(height: 12),
-
-        Row(children: [
-          const Icon(Icons.auto_awesome, color: Colors.greenAccent, size: 16),
-          const SizedBox(width: 8),
-          Text(
-            "Auto-Graded Results",
-            style: GoogleFonts.spaceGrotesk(
-                fontWeight: FontWeight.bold,
-                color: Colors.greenAccent,
-                fontSize: 15),
-          ),
-        ]),
-        const SizedBox(height: 16),
-
-        Text("Part - I",
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: Colors.blueAccent)),
-        const SizedBox(height: 8),
-        ...part1Rows,
-        const SizedBox(height: 16),
-
-        Text("Part - II",
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: Colors.blueAccent)),
-        const SizedBox(height: 8),
-        ...part2Rows,
-        const SizedBox(height: 16),
-
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            _scoreChip("$correct", "Correct", Colors.greenAccent),
-            _scoreChip("$wrong",   "Wrong",   Colors.redAccent),
-            _scoreChip("$blank",   "Blank",   Colors.white24),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Center(
-          child: Text(
-            "Score: $correct / $totalQ",
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.white),
-          ),
-        ),
-      ],
+    final report = grade_quiz(
+      StudentAnswers(part1: omrResult.part1, part2: omrResult.part2),
+      key,
     );
-  }
-
-  Widget _scoreChip(String count, String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Column(children: [
-        Text(count, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16)),
-        Text(label, style: TextStyle(color: color.withOpacity(0.7), fontSize: 10)),
-      ]),
-    );
+    return GradeReportView(report: report);
   }
 
   @override

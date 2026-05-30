@@ -4,16 +4,27 @@ class AnswerKey {
   final Map<String, String> part1; // Q01 -> "D", etc.
   final Map<String, String> part2;
 
+  /// Marks awarded per correct answer (default 1).
+  final double marksPerCorrect;
+
+  /// Penalty subtracted per wrong answer (default 0 = no negative marking).
+  final double negativePerWrong;
+
   AnswerKey({
     required this.quizTitle,
     required this.setInfo,
     required this.part1,
     required this.part2,
+    this.marksPerCorrect = 1.0,
+    this.negativePerWrong = 0.0,
   });
 
+  bool get hasNegativeMarking => negativePerWrong > 0;
+
+  /// Expected QR payload (negative-marking / marks segments are OPTIONAL):
+  ///   "AI Quiz SP2026 Set-C | Part-I: Q1=D Q2=A ... | Part-II: ... | Neg: 0.25 | Marks per: 1"
   factory AnswerKey.fromPayload(String payload) {
     try {
-      // Example: "AI Quiz SP2026 Set-C | Part-I: Q1=D Q2=A ... | Part-II: ..."
       final parts = payload.split('|').map((e) => e.trim()).toList();
 
       String quizTitle = parts[0];
@@ -26,12 +37,27 @@ class AnswerKey {
 
       Map<String, String> part1 = {};
       Map<String, String> part2 = {};
+      double marksPerCorrect = 1.0;
+      double negativePerWrong = 0.0;
 
       for (var part in parts) {
-        if (part.contains("Part-I:")) {
-          part1 = _parseAnswers(part.replaceAll("Part-I:", "").trim());
-        } else if (part.contains("Part-II:")) {
-          part2 = _parseAnswers(part.replaceAll("Part-II:", "").trim());
+        final lower = part.toLowerCase();
+
+        if (lower.contains("part-i:") && !lower.contains("part-ii:")) {
+          part1 = _parseAnswers(
+              part.replaceAll(RegExp('part-i:', caseSensitive: false), "").trim());
+        } else if (lower.contains("part-ii:")) {
+          part2 = _parseAnswers(
+              part.replaceAll(RegExp('part-ii:', caseSensitive: false), "").trim());
+        } else if (lower.contains("neg")) {
+          // e.g. "Neg: 0.25" or "Negative -0.25"
+          final m = RegExp(r'(\d+(\.\d+)?)').firstMatch(part);
+          if (m != null) negativePerWrong = double.tryParse(m.group(1)!) ?? 0.0;
+        } else if (lower.contains("mark") &&
+            (lower.contains("per") || lower.contains("each") || lower.contains("/q"))) {
+          // e.g. "Marks per: 2"  (NOT "Total Marks: 16")
+          final m = RegExp(r'(\d+(\.\d+)?)').firstMatch(part);
+          if (m != null) marksPerCorrect = double.tryParse(m.group(1)!) ?? 1.0;
         }
       }
 
@@ -40,6 +66,8 @@ class AnswerKey {
         setInfo: setInfo,
         part1: part1,
         part2: part2,
+        marksPerCorrect: marksPerCorrect,
+        negativePerWrong: negativePerWrong,
       );
     } catch (e) {
       return AnswerKey(

@@ -1,7 +1,7 @@
 # VisionQR – AI-Powered QR & OMR Evaluation System
 
 <p align="center">
-  <img src="Images/Dashboard.jpeg" width="700"/>
+  <img src="Images/222.jpeg" width="700"/>
 </p>
 
 ## 📌 Project Overview
@@ -187,44 +187,34 @@ flutter run -d windows
 ## App Interfaces
 
 ### Splash Screen
-
-![Splash Screen](Images/333.jpeg)
+<img src="Images/111.jpeg" width="220"/>
 
 ### Dashboard
-
-![Dashboard](Images/222.jpeg)
-
-### Navigation Interface
-
-![Navigation Interface](Images/111.jpeg)
+<img src="Images/222.jpeg" width="220"/>
 
 ### Create QR Screen
-
-![Create QR](Images/888.jpeg)
+<img src="Images/333.jpeg" width="220"/>
 
 ### Get Media Screen
-
-![Get Media](Images/1010.jpeg)
+<img src="Images/444.jpeg" width="220"/>
 
 ### Get Media Result
-
-![Get Media Result](Images/999.jpeg)
+<img src="Images/555.jpeg" width="220"/>
 
 ### Batch Grading
-
-![Batch Grading](Images/666.jpeg)
+<img src="Images/666.jpeg" width="220"/>
 
 ### OMR Detection
-
-![OMR Detection](Images/555.jpeg)
+<img src="Images/777.jpeg" width="220"/>
 
 ### OMR Detection Result
-
-![OMR Detection Result](Images/444.jpeg)
+<img src="Images/888.jpeg" width="220"/>
 
 ### History Screen
+<img src="Images/999.jpeg" width="220"/>
 
-![History](Images/777.jpeg)
+### Navigation Interface
+<img src="Images/1010.jpeg" width="220"/>
 
 
 

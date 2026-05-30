@@ -1,6 +1,8 @@
 # VisionQR – AI-Powered QR & OMR Evaluation System
 
-![Dashboard](Images/222.jpeg)
+<p align="center">
+  <img src="Images/Dashboard.jpeg" width="700"/>
+</p>
 
 ## 📌 Project Overview
 
@@ -182,7 +184,7 @@ flutter run -d windows
 
 ---
 
-## 📸 Application Screenshots
+## App Interfaces
 
 ### Splash Screen
 

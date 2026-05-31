@@ -125,7 +125,9 @@ git clone https://github.com/sanaa-kh-37/VisionQR.git
 
 ### 2. Open Project
 
-Open the project in Android Studio or VS Code.
+Open the project in Android Studio or VS Code. It uses Gemini 2.5 flash so for the accurate working of the application, make sure you have made a .env file in the project root and have your gemini API Key there.
+
+GEMINI_API_KEY=your_api_key
 
 ### 3. Install Dependencies
 
